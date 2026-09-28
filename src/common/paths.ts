@@ -1,0 +1,57 @@
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
+
+// Everything the app persists lives under one folder, overridable for tests.
+export const DATA_DIR = process.env.AGENT_CANVAS_HOME || join(homedir(), '.agent-canvas');
+export const WORKFLOWS_DIR = join(DATA_DIR, 'workflows');
+export const DB_PATH = join(DATA_DIR, 'runs.db');
+const SETTINGS_PATH = join(DATA_DIR, 'settings.json');
+
+mkdirSync(WORKFLOWS_DIR, { recursive: true });
+
+export interface Settings {
+  /** Max `claude` processes running at once (they share one subscription). */
+  concurrency: number;
+  /** Path/name of the Claude Code CLI binary. */
+  claudeBin: string;
+  /** Retry once after this delay when a run hits a rate limit. */
+  rateLimitRetryMs: number;
+  /** macOS notification when a run needs your review or answer. */
+  desktopNotifications: boolean;
+  /** Where Output nodes write by default (per-workflow subfolders). */
+  outputsDir: string;
+  /** Chrome/Chromium used for PDF; empty = auto-detect. */
+  chromePath: string;
+  /** Base URL used in links inside notifications; empty = this machine (http://127.0.0.1:<port>). */
+  publicUrl: string;
+  /** Outgoing mail for Email actions set to SMTP. The password lives in the Keychain. */
+  smtp: { host: string; port: number; secure: boolean; user: string; from: string };
+}
+
+const DEFAULT_SETTINGS: Settings = {
+  concurrency: 2,
+  claudeBin: process.env.CLAUDE_BIN || 'claude',
+  rateLimitRetryMs: 60_000,
+  desktopNotifications: true,
+  outputsDir: join(DATA_DIR, 'outputs'),
+  chromePath: '',
+  publicUrl: '',
+  smtp: { host: '', port: 587, secure: false, user: '', from: '' },
+};
+
+export function loadSettings(): Settings {
+  if (!existsSync(SETTINGS_PATH)) return { ...DEFAULT_SETTINGS };
+  try {
+    const saved = JSON.parse(readFileSync(SETTINGS_PATH, 'utf8'));
+    return { ...DEFAULT_SETTINGS, ...saved, smtp: { ...DEFAULT_SETTINGS.smtp, ...saved.smtp } };
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+
+export function saveSettings(settings: Settings): void {
+  writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
+}
+
+export const expandHome = (p: string) => p.replace(/^~(?=$|\/)/, homedir());
