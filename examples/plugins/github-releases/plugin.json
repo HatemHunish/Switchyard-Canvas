@@ -1,0 +1,31 @@
+{
+  "id": "github-releases",
+  "name": "GitHub releases",
+  "version": "1.0.0",
+  "icon": "🐙",
+  "description": "New releases of GitHub repositories you follow (yours, competitors', dependencies).",
+  "notice": "Works without a token (60 requests/hour). A fine-grained token with public read access raises that to 5,000.",
+  "homepage": "https://github.com/settings/personal-access-tokens",
+  "credentials": [{ "key": "token", "label": "GitHub token", "optional": true, "help": "https://github.com/settings/personal-access-tokens" }],
+  "sources": [
+    {
+      "id": "releases",
+      "title": "Repository releases",
+      "hint": "New releases with their notes",
+      "kind": "article",
+      "fields": [
+        { "key": "repos", "label": "Repositories", "type": "list", "required": true, "placeholder": "owner/repo", "help": "One per line, e.g. anthropics/claude-code." },
+        { "key": "prereleases", "label": "Include pre-releases", "type": "boolean", "default": false }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "github_latest_release",
+      "description": "The latest release of a GitHub repository: version, date and release notes.",
+      "inputSchema": { "type": "object", "properties": { "repo": { "type": "string", "description": "owner/repo" } }, "required": ["repo"] }
+    }
+  ],
+  "insights": [{ "title": "Releases per repository", "panel": "top", "by": "extra.repo" }],
+  "templates": ["templates/release-digest.json"]
+}

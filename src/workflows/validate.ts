@@ -6,6 +6,12 @@ export interface ValidationIssue {
 }
 
 const isTrigger = (kind: string) => kind.startsWith('trigger.');
+
+/** Plugin source definitions, registered by PluginsService (keeps this module free of Nest). */
+type SourceLookup = (plugin: string, source: string) => { title: string; pluginName: string; enabled: boolean; fields: Array<{ key: string; label: string; required?: boolean }> } | undefined;
+let lookupSource: SourceLookup = () => undefined;
+export const setSourceLookup = (fn: SourceLookup) => (lookupSource = fn);
+const isStore = (kind?: string) => kind === 'memory' || kind === 'dataset';
 const isLoop = (e: { sourceHandle?: string | null }) => e.sourceHandle === 'revise';
 const isTeam = (e: { sourceHandle?: string | null }) => e.sourceHandle === 'team';
 
@@ -62,6 +68,12 @@ export function validateWorkflow(wf: Workflow): ValidationIssue[] {
     if (target?.kind === 'memory') {
       issues.push({ nodeId: target.id, message: 'Memory is a store, not a step: connect it from Memory to an Agent.' });
     }
+    if (source?.kind === 'dataset' && target && target.kind !== 'agent' && target.kind !== 'orchestrator') {
+      issues.push({ nodeId: source.id, message: 'A Dataset can only be connected to Agent or Orchestrator nodes (Sources and Insight pick their dataset by name).' });
+    }
+    if (target?.kind === 'dataset') {
+      issues.push({ nodeId: target.id, message: 'Dataset is a store, not a step: Sources write to it by name. Connect it from the Dataset to an Agent.' });
+    }
     if (target && isTrigger(target.kind)) {
       issues.push({ nodeId: target.id, message: 'Triggers cannot have incoming connections.' });
     }
@@ -116,6 +128,22 @@ export function validateWorkflow(wf: Workflow): ValidationIssue[] {
       case 'memory':
         if (!d.name?.trim()) issues.push({ nodeId: n.id, message: 'Memory needs a name.' });
         break;
+      case 'dataset':
+        if (!d.name?.trim()) issues.push({ nodeId: n.id, message: 'Dataset needs a name.' });
+        break;
+      case 'source': {
+        const def = lookupSource(d.plugin, d.source);
+        if (!def) {
+          issues.push({ nodeId: n.id, message: `Source "${n.label || d.source}" needs the plugin "${d.plugin}", which is not installed.` });
+          break;
+        }
+        if (!def.enabled) issues.push({ nodeId: n.id, message: `${def.title}: the plugin "${def.pluginName}" is turned off. Enable it under Plugins.` });
+        for (const f of def.fields) {
+          const v = d.config?.[f.key];
+          if (f.required && (v === undefined || v === null || String(v).trim() === '' || (Array.isArray(v) && !v.length))) issues.push({ nodeId: n.id, message: `${n.label || def.title}: "${f.label}" is required.` });
+        }
+        break;
+      }
       case 'trigger.file':
         if (!d.path?.trim()) issues.push({ nodeId: n.id, message: 'File watch needs a path.' });
         break;

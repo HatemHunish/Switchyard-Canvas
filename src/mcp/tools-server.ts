@@ -6,6 +6,8 @@
  *                   waits for the person's answer, then resumes the session.
  *  - memory_search  full-text search over the connected memory stores.
  *  - memory_save    save a note to the connected writable store.
+ *  - dataset_*      search/stats/top items of connected datasets (Dataset nodes).
+ *  - plugin tools   whatever the agent's selected plugins provide (schemas in AC_EXTRA_TOOLS).
  *
  * Memory calls go back to the app's API with a per-process secret.
  * Config comes from env vars set by ClaudeCliService.
@@ -18,6 +20,12 @@ const token = process.env.AC_TOKEN ?? '';
 const searchStores: string[] = JSON.parse(process.env.AC_SEARCH_STORES || '[]');
 const writeStore = process.env.AC_WRITE_STORE || '';
 const runId = process.env.AC_RUN_ID || undefined;
+const datasets: string[] = JSON.parse(process.env.AC_DATASETS || '[]');
+const extraTools: Array<{ name: string; description: string; inputSchema: unknown }> = JSON.parse(process.env.AC_EXTRA_TOOLS || '[]');
+const extraNames = new Set(extraTools.map((t) => t.name));
+
+const range = { type: 'string', enum: ['24h', '7d', '14d', '30d', '90d', '365d'], description: 'Time window (default: all for search, 7d for stats).' };
+const datasetArg = { type: 'string', description: 'Dataset id; omit to use all connected datasets.' };
 
 const TOOLS = [
   {
@@ -44,6 +52,32 @@ const TOOLS = [
       required: ['key', 'content'],
     },
   },
+  {
+    name: 'dataset_search',
+    description: 'Full-text search the connected datasets (collected posts, comments, articles, reviews, trends). Newest or best match first.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Keywords; omit for the latest items.' },
+        range,
+        source: { type: 'string', description: 'Plugin id, e.g. reddit, rss, youtube.' },
+        sentiment: { type: 'string', enum: ['neg', 'pos', 'neutral'] },
+        limit: { type: 'number', description: 'Max items (default 15, max 50).' },
+        dataset: datasetArg,
+      },
+    },
+  },
+  {
+    name: 'dataset_stats',
+    description: 'Summary of the connected datasets: volume and change, sources, sentiment, top topics and authors, time series (followers, search interest), most engaging items.',
+    inputSchema: { type: 'object', properties: { range, dataset: datasetArg } },
+  },
+  {
+    name: 'dataset_top',
+    description: 'The most engaging items (likes, comments, shares, views, score) in the connected datasets.',
+    inputSchema: { type: 'object', properties: { range, source: { type: 'string' }, limit: { type: 'number' }, dataset: datasetArg } },
+  },
+  ...extraTools,
 ].filter((t) => enabled.has(t.name));
 
 const send = (msg: unknown) => process.stdout.write(`${JSON.stringify(msg)}\n`);
@@ -69,7 +103,12 @@ async function runTool(name: string, args: any) {
       await call('/api/internal/memory/save', { store: writeStore, key: String(args?.key ?? ''), content: String(args?.content ?? ''), runId });
       return text(`Saved "${args?.key}".`);
     }
+    case 'dataset_search':
+    case 'dataset_stats':
+    case 'dataset_top':
+      return text((await call('/api/internal/datasets/query', { tool: name, datasets, args: args ?? {} })).text);
     default:
+      if (extraNames.has(name)) return text((await call('/api/internal/plugins/call', { tool: name, args: args ?? {} })).text);
       return text(`Unknown tool ${name}`, true);
   }
 }

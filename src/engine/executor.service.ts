@@ -4,7 +4,9 @@ import { runInNewContext } from 'vm';
 import { existsSync, mkdirSync, statSync } from 'fs';
 import { basename, join } from 'path';
 import { DATA_DIR, expandHome, loadSettings } from '../common/paths';
-import { ActionData, AgentData, HumanData, MemoryData, NodeEvent, OrchestratorData, OutputData, OutputFile, NodeOutput, NodeRun, NodeStatus, Run, WfNode, Workflow } from '../common/types';
+import { ActionData, AgentData, HumanData, InsightData, Item, MemoryData, NodeEvent, OrchestratorData, OutputData, OutputFile, NodeOutput, NodeRun, NodeStatus, Point, Run, SourceData, WfNode, Workflow } from '../common/types';
+import { DatasetsService, datasetIdFor } from '../datasets/datasets.service';
+import { PluginsService } from '../plugins/plugins.service';
 import { ActionsService, freePath, safeName } from '../actions/actions.service';
 import { MemoryService, storeIdFor } from '../memory/memory.service';
 import { convert, EXT } from '../output/convert';
@@ -94,6 +96,47 @@ function joinInputs(inputs: Array<{ from: WfNode; out?: NodeOutput }>): string {
     : inputs.map((i) => `### From ${i.from.data?.name || i.from.label || i.from.kind}\n${textOf(i.out)}`).join('\n\n---\n\n');
 }
 
+/** Markdown digest of a source's items, for the next step (and the run log). */
+function digest(title: string, items: Item[], total: number, dataset: string, points: Point[] = []): string {
+  const head = `## ${title}: ${items.length} item${items.length === 1 ? '' : 's'} (dataset "${dataset}", ${total} in total)`;
+  const date = (t?: number) => (t ? new Date(t).toISOString().slice(0, 10) : '');
+  const lines = items.slice(0, 40).map((i, n) => {
+    const meta = [i.author, i.extra?.subreddit as string, date(i.publishedAt), i.metrics && Object.entries(i.metrics).filter(([, v]) => v != null).map(([k, v]) => `${k} ${v}`).join(', ')].filter(Boolean).join(' · ');
+    const body = i.text ? `\n   ${i.text.replace(/\s+/g, ' ').slice(0, 300)}` : '';
+    return `${n + 1}. **${i.title || (i.text ?? '').slice(0, 80) || i.id}**${meta ? ` — ${meta}` : ''}${body}${i.url ? `\n   ${i.url}` : ''}`;
+  });
+  const series = new Map<string, number>();
+  for (const p of points) series.set(p.series, p.value);
+  const pts = series.size ? `\n\nUpdated series: ${[...series].map(([k, v]) => `${k} = ${v}`).join('; ')}` : '';
+  return `${head}\n\n${lines.join('\n') || '(nothing new)'}${items.length > 40 ? `\n\n…and ${items.length - 40} more` : ''}${pts}`;
+}
+
+/** Renders {{templates}} inside a source's settings (strings and string lists). */
+function renderConfig(config: Record<string, unknown>, ctx: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(config ?? {})) {
+    out[k] = typeof v === 'string' ? renderTemplate(v, ctx) : Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? renderTemplate(x, ctx) : x)) : v;
+  }
+  return out;
+}
+
+/** The dataset a source (or a merge of sources) before this step wrote to. */
+function upstreamDataset(inputs: Array<{ out?: NodeOutput }>): string | undefined {
+  const look = (v: any): string | undefined => {
+    if (!v || typeof v !== 'object') return undefined;
+    if (typeof v.datasetName === 'string') return v.datasetName;
+    if (Array.isArray(v)) for (const x of v) { const r = look(x); if (r) return r; }
+    return undefined;
+  };
+  for (const i of inputs) {
+    const r = look(i.out?.structured);
+    if (r) return r;
+  }
+  return undefined;
+}
+
+const INSIGHT_BATCH = 25;
+
 function textOf(out?: NodeOutput): string {
   if (!out) return '';
   return out.structured !== undefined ? JSON.stringify(out.structured, null, 2) : out.text;
@@ -112,7 +155,29 @@ export class ExecutorService {
     private readonly inbox: InboxService,
     private readonly memory: MemoryService,
     private readonly actions: ActionsService,
+    private readonly plugins: PluginsService,
+    private readonly datasets: DatasetsService,
   ) {}
+
+  /** Dataset nodes wired into this agent's memory socket. */
+  private datasetsFor(wf: Workflow, node: WfNode): Array<{ id: string; name: string }> {
+    return wf.edges
+      .filter((e) => e.target === node.id)
+      .map((e) => wf.nodes.find((n) => n.id === e.source))
+      .filter((n): n is WfNode => n?.kind === 'dataset' && !!n.data?.name?.trim())
+      .map((n) => ({ id: datasetIdFor(n.data.name), name: n.data.name.trim() }));
+  }
+
+  /** Tells the agent what its datasets hold, so it knows the tools are worth calling. */
+  private datasetContext(sets: Array<{ id: string; name: string }>) {
+    if (!sets.length) return '';
+    const known = new Map(this.datasets.list().map((d: any) => [d.id, d]));
+    const lines = sets.map((s) => {
+      const d: any = known.get(s.id);
+      return `- "${s.name}" (id ${s.id}): ${d ? `${d.items} items from ${d.sources.join(', ') || '—'}${d.series ? `, ${d.series} time series` : ''}` : 'empty so far'}`;
+    });
+    return `## Datasets\nCollected media and metrics you can query with the dataset_stats (overview first), dataset_search and dataset_top tools:\n${lines.join('\n')}\nBase claims about the data on these tools' results, and cite item links.`;
+  }
 
   /** Stores already refreshed during a run, so "re-index before run" happens once per run. */
   private readonly indexedInRun = new Map<string, Set<string>>();
@@ -286,7 +351,7 @@ export class ExecutorService {
       const base =
         anode.kind === 'orchestrator'
           ? this.orchestratorOptions(wf, anode, prompt, stores, run, emit, setStatus, helpers)
-          : this.agentOptions(anode.data as AgentData, prompt, stores, run);
+          : this.agentOptions(anode.data as AgentData, prompt, stores, run, this.datasetsFor(wf, anode));
       const res = await this.agentTurn(wf, anode, anr, run, { ...base, resumeSessionId: anr.sessionId }, signal, setStatus, emit, stores);
       if (!res.ok) {
         anr.error = res.error;
@@ -424,22 +489,29 @@ export class ExecutorService {
       .filter((e) => e.source === node.id && isTeamEdge(e))
       .map((e) => wf.nodes.find((n) => n.id === e.target))
       .filter((n): n is WfNode => n?.kind === 'agent')
-      .map((n) => ({ node: n, key: workerKey(n.data.name), stores: this.memoryFor(wf, n, run, onEvent) }));
+      .map((n) => ({ node: n, key: workerKey(n.data.name), stores: this.memoryFor(wf, n, run, onEvent), sets: this.datasetsFor(wf, n) }));
 
     // One MCP tool server serves the orchestrator and its workers, so it gets every store any of them uses.
     const allStores = [...ownStores, ...team.flatMap((w) => w.stores)].filter((s, i, a) => a.findIndex((x) => x.id === s.id) === i);
-    const opts = this.agentOptions(d, prompt, allStores, run);
+    const ownSets = this.datasetsFor(wf, node);
+    const allSets = [...ownSets, ...team.flatMap((w) => w.sets)].filter((s, i, a) => a.findIndex((x) => x.id === s.id) === i);
+    const opts = this.agentOptions(d, prompt, allStores, run, allSets);
+    opts.pluginTools = this.plugins.toolDefs([...new Set([...(d.pluginTools ?? []), ...team.flatMap((w) => w.node.data.pluginTools ?? [])])]);
     // The orchestrator's own context should only describe its own memory.
-    opts.appendSystemPrompt = [d.systemPrompt?.trim(), ownStores.length ? this.memory.contextFor(ownStores, prompt) : '', d.canAsk ? ASK_PROTOCOL : ''].filter(Boolean).join('\n\n');
+    opts.appendSystemPrompt = [d.systemPrompt?.trim(), ownStores.length ? this.memory.contextFor(ownStores, prompt) : '', this.datasetContext(ownSets), d.canAsk ? ASK_PROTOCOL : ''].filter(Boolean).join('\n\n');
 
     opts.agents = {};
     for (const w of team) {
       const wd = w.node.data as AgentData;
-      const memTools = w.stores.length ? ['mcp__agent_canvas__memory_search', ...(w.stores.some((s) => s.data.allowWrite) ? ['mcp__agent_canvas__memory_save'] : [])] : [];
+      const memTools = [
+        ...(w.stores.length ? ['mcp__agent_canvas__memory_search', ...(w.stores.some((s) => s.data.allowWrite) ? ['mcp__agent_canvas__memory_save'] : [])] : []),
+        ...(w.sets.length ? ['dataset_search', 'dataset_stats', 'dataset_top'].map((t) => `mcp__agent_canvas__${t}`) : []),
+        ...(wd.pluginTools ?? []).map((t) => `mcp__agent_canvas__${t}`),
+      ];
       opts.agents[w.key] = {
         description: wd.description?.trim() || wd.name,
         prompt:
-          [wd.systemPrompt?.trim(), wd.prompt?.trim() && `## Your standing instructions\n${wd.prompt.trim()}`, w.stores.length ? this.memory.contextFor(w.stores, wd.prompt ?? '') : '']
+          [wd.systemPrompt?.trim(), wd.prompt?.trim() && `## Your standing instructions\n${wd.prompt.trim()}`, w.stores.length ? this.memory.contextFor(w.stores, wd.prompt ?? '') : '', this.datasetContext(w.sets)]
             .filter(Boolean)
             .join('\n\n') || `You are ${wd.name}.`,
         tools: [...(wd.allowedTools ?? []), ...memTools],
@@ -506,15 +578,17 @@ export class ExecutorService {
     return opts;
   }
 
-  private agentOptions(d: AgentData, prompt: string, stores: Array<{ id: string; data: MemoryData }> = [], run?: Run): CliRunOptions {
+  private agentOptions(d: AgentData, prompt: string, stores: Array<{ id: string; data: MemoryData }> = [], run?: Run, sets: Array<{ id: string; name: string }> = []): CliRunOptions {
     const memoryContext = stores.length ? this.memory.contextFor(stores, prompt) : '';
     return {
+      datasets: sets.map((s) => s.id),
+      pluginTools: this.plugins.toolDefs(d.pluginTools ?? []),
       prompt,
       cwd: expandHome(d.cwd.trim()),
       model: d.model,
       effort: d.effort,
       memory: stores.length ? { search: stores.map((s) => s.id), write: stores.find((s) => s.data.allowWrite)?.id, runId: run?.id } : undefined,
-      appendSystemPrompt: [d.systemPrompt?.trim(), memoryContext, d.canAsk ? ASK_PROTOCOL : ''].filter(Boolean).join('\n\n'),
+      appendSystemPrompt: [d.systemPrompt?.trim(), memoryContext, this.datasetContext(sets), d.canAsk ? ASK_PROTOCOL : ''].filter(Boolean).join('\n\n'),
       allowedTools: d.allowedTools,
       disallowedTools: d.disallowedTools,
       permissionMode: d.permissionMode,
@@ -635,7 +709,7 @@ export class ExecutorService {
 
     try {
       if (node.kind === 'merge') {
-        outputs.set(node.id, { text: input, structured: inputs.length > 1 ? ctx.inputs : undefined });
+        outputs.set(node.id, { text: input, structured: inputs.length > 1 ? ctx.inputs : undefined, files: upstreamFiles.length ? upstreamFiles : undefined });
         nr.output = outputs.get(node.id);
         setStatus(nr, 'success');
         return true;
@@ -704,6 +778,158 @@ ${input || '(empty)'}`;
         return true;
       }
 
+      if (node.kind === 'source') {
+        setStatus(nr, 'running');
+        const d = node.data as SourceData;
+        const { def, plugin } = this.plugins.source(d.plugin, d.source);
+        const title = node.label?.trim() || def.title;
+        const stateKey = `${wf.id}:${node.id}`;
+        const state = this.datasets.getState(stateKey);
+        const datasetName = d.dataset?.trim() || wf.name;
+        let r: Awaited<ReturnType<PluginsService['runSource']>>;
+        try {
+          r = await this.plugins.runSource(d.plugin, d.source, renderConfig(d.config, ctx), { signal, state, log: (text) => onEvent({ t: 'info', text, at: Date.now() }) });
+        } catch (err: any) {
+          if (!d.continueOnError || signal.aborted) throw err;
+          // One flaky platform shouldn't stop a monitor: fail this step, pass nothing on, keep going.
+          nr.error = String(err?.response?.message ?? err?.message ?? err);
+          onEvent({ t: 'error', text: `${nr.error} (continuing without this source)`, at: Date.now() });
+          const out: NodeOutput = { text: `## ${title}: failed (${nr.error})`, structured: { dataset: datasetIdFor(datasetName), datasetName, source: d.plugin, fetched: 0, newCount: 0, items: [], error: nr.error } };
+          outputs.set(node.id, out);
+          nr.output = out;
+          setStatus(nr, 'failed');
+          return true;
+        }
+        this.datasets.setState(stateKey, state);
+        if (r.note) onEvent({ t: 'info', text: r.note, at: Date.now() });
+        const kept = r.items.slice(0, Math.max(1, Number(d.limit) || 100));
+        const up = this.datasets.upsert(datasetName, d.plugin, d.source, title, kept, r.points, run.id);
+        const passed = d.onlyNew === false ? kept : up.fresh;
+        onEvent({
+          t: 'info',
+          text: `${plugin.manifest.name}: fetched ${kept.length}, ${up.fresh.length} new${r.points?.length ? `, ${r.points.length} data points` : ''}. Dataset "${datasetName}" has ${up.total} items.`,
+          at: Date.now(),
+        });
+        const out: NodeOutput = {
+          text: digest(title, passed, up.total, datasetName, r.points),
+          structured: {
+            dataset: up.dataset,
+            datasetName,
+            source: d.plugin,
+            fetched: kept.length,
+            newCount: up.fresh.length,
+            total: up.total,
+            items: passed.slice(0, 100).map((i) => ({ ...i, text: i.text?.slice(0, 600) })),
+            points: r.points?.length ?? 0,
+          },
+        };
+        outputs.set(node.id, out);
+        nr.output = out;
+        setStatus(nr, 'success');
+        if (d.stopIfEmpty && !passed.length) {
+          onEvent({ t: 'info', text: 'Nothing new, so the next steps are skipped.', at: Date.now() });
+          return false;
+        }
+        return true;
+      }
+
+      if (node.kind === 'insight') {
+        setStatus(nr, 'running');
+        const d = node.data as InsightData;
+        const datasetName = d.dataset?.trim() || upstreamDataset(inputs) || wf.name;
+        const ds = datasetIdFor(datasetName);
+        const pending = this.datasets.unenriched(ds, Math.min(500, Math.max(1, Number(d.maxItems) || 100)));
+        const fields = d.fields?.length ? d.fields : ['sentiment', 'topics'];
+        const custom = String(d.custom ?? '')
+          .split('\n')
+          .map((l) => /^\s*([a-zA-Z][\w]{0,30})\s*:\s*(.+)$/.exec(l))
+          .filter((m): m is RegExpExecArray => !!m)
+          .map((m) => ({ key: m[1], what: m[2].trim() }));
+        const labelled: Array<{ item: Item; r: Record<string, any> }> = [];
+        const props: Record<string, unknown> = { i: { type: 'integer' } };
+        const guide: string[] = [];
+        if (fields.includes('sentiment')) (props.sentiment = { type: 'number', minimum: -1, maximum: 1 }), guide.push(`sentiment: −1 (very negative) to 1 (very positive)${d.brief?.trim() ? ' toward the subject in the brief' : ''}; 0 for neutral or factual`);
+        if (fields.includes('topics')) (props.topics = { type: 'array', items: { type: 'string' }, maxItems: 4 }), guide.push('topics: 1–4 short lowercase labels; use the same wording for the same topic across items');
+        if (fields.includes('language')) (props.language = { type: 'string' }), guide.push('language: ISO 639-1 code of the text');
+        if (fields.includes('relevance')) (props.relevance = { type: 'number', minimum: 0, maximum: 1 }), guide.push('relevance: 0–1, how relevant the item is to the brief');
+        if (fields.includes('entities')) (props.entities = { type: 'array', items: { type: 'string' }, maxItems: 8 }), guide.push('entities: brands, products, people or places mentioned');
+        if (fields.includes('summary')) (props.summary = { type: 'string' }), guide.push('summary: one line under 20 words, in English');
+        for (const c of custom) (props[c.key] = { type: 'string' }), guide.push(`${c.key}: ${c.what}`);
+        const schema = JSON.stringify({
+          type: 'object',
+          properties: { results: { type: 'array', items: { type: 'object', properties: props, required: Object.keys(props) } } },
+          required: ['results'],
+        });
+
+        for (let b = 0; b < pending.length; b += INSIGHT_BATCH) {
+          if (signal.aborted) throw new RequestClosedError('Run cancelled');
+          const batch = pending.slice(b, b + INSIGHT_BATCH);
+          const list = batch
+            .map((p, i) => `[${i + 1}] (${p.item.kind}${p.item.author ? ` by ${p.item.author}` : ''}) ${p.item.title ?? ''}\n${(p.item.text ?? '').replace(/\s+/g, ' ').slice(0, 700)}`)
+            .join('\n\n');
+          const prompt = `Label each item of a media-monitoring dataset.${d.brief?.trim() ? `\n\nBrief (what we care about): ${renderTemplate(d.brief, ctx)}` : ''}\n\nFor every item return its number i and:\n${guide.map((g) => `- ${g}`).join('\n')}\n\n## Items\n${list}`;
+          nr.prompt = prompt;
+          onEvent({ t: 'info', text: `Labelling items ${b + 1}–${b + batch.length} of ${pending.length}…`, at: Date.now() });
+          const res = await this.callClaude(nr, run, { prompt, cwd: DATA_DIR, model: d.model || 'haiku', tools: [], jsonSchema: schema, permissionMode: 'dontAsk' }, signal, setStatus, onEvent);
+          if (!res.ok) throw new Error(res.error || 'Labelling failed');
+          setStatus(nr, 'running');
+          const results: any[] = (res.structured as any)?.results ?? [];
+          for (const r of results) {
+            const p = batch[Number(r.i) - 1];
+            if (!p) continue;
+            const { i, sentiment, topics, ...rest } = r;
+            this.datasets.enrich(p.rowid, { sentiment: typeof sentiment === 'number' ? sentiment : undefined, topics: Array.isArray(topics) ? topics.map(String) : undefined, enrich: Object.keys(rest).length ? rest : undefined });
+            labelled.push({ item: p.item, r });
+          }
+        }
+
+        const n = labelled.length;
+        const sent = labelled.map((l) => l.r.sentiment).filter((v): v is number => typeof v === 'number');
+        const neg = sent.filter((v) => v <= -0.25).length;
+        const pos = sent.filter((v) => v >= 0.25).length;
+        const topicCount = new Map<string, number>();
+        for (const l of labelled) for (const t of l.r.topics ?? []) topicCount.set(String(t).toLowerCase(), (topicCount.get(String(t).toLowerCase()) ?? 0) + 1);
+        const topTopics = [...topicCount].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([topic, count]) => ({ topic, count }));
+        const row = (l: { item: Item; r: Record<string, any> }) => ({ title: l.item.title || (l.item.text ?? '').slice(0, 100), url: l.item.url, author: l.item.author, ...l.r, i: undefined });
+        const bySent = [...labelled].filter((l) => typeof l.r.sentiment === 'number').sort((a, b) => a.r.sentiment - b.r.sentiment);
+        const stats = {
+          dataset: ds,
+          datasetName,
+          count: n,
+          avgSentiment: sent.length ? Math.round((sent.reduce((a, v) => a + v, 0) / sent.length) * 100) / 100 : null,
+          negative: neg,
+          positive: pos,
+          negativeShare: sent.length ? Math.round((neg / sent.length) * 100) / 100 : 0,
+          positiveShare: sent.length ? Math.round((pos / sent.length) * 100) / 100 : 0,
+          topTopics,
+          mostNegative: bySent.slice(0, 5).filter((l) => l.r.sentiment < 0).map(row),
+          mostPositive: bySent.slice(-5).reverse().filter((l) => l.r.sentiment > 0).map(row),
+          items: labelled.slice(0, 100).map(row),
+        };
+        const fmtRow = (x: any) => `- ${x.title}${x.author ? ` — ${x.author}` : ''} (${Number(x.sentiment).toFixed(2)})${x.url ? ` ${x.url}` : ''}`;
+        const text = n
+          ? [
+              `## Insights: ${n} new item${n === 1 ? '' : 's'} labelled in "${datasetName}"`,
+              sent.length ? `Average sentiment ${stats.avgSentiment} (−1..1): ${pos} positive, ${neg} negative, ${sent.length - pos - neg} neutral.` : '',
+              topTopics.length ? `Top topics: ${topTopics.map((t) => `${t.topic} (${t.count})`).join(', ')}.` : '',
+              stats.mostNegative.length ? `### Most negative\n${stats.mostNegative.map(fmtRow).join('\n')}` : '',
+              stats.mostPositive.length ? `### Most positive\n${stats.mostPositive.map(fmtRow).join('\n')}` : '',
+            ]
+              .filter(Boolean)
+              .join('\n\n')
+          : `No new items to label in "${datasetName}".`;
+        onEvent({ t: 'info', text: n ? `Labelled ${n} item(s).` : 'Nothing new to label.', at: Date.now() });
+        const out: NodeOutput = { text, structured: stats };
+        outputs.set(node.id, out);
+        nr.output = out;
+        setStatus(nr, 'success');
+        if (d.stopIfEmpty && !n) {
+          onEvent({ t: 'info', text: 'Nothing new, so the next steps are skipped.', at: Date.now() });
+          return false;
+        }
+        return true;
+      }
+
       if (node.kind === 'human') {
         return await this.runReview(wf, node, nr, inputs, input, outputs, run, signal, setStatus, onEvent, h.loopBack);
       }
@@ -713,10 +939,14 @@ ${input || '(empty)'}`;
         const upstream = inputs.length === 1 ? valueOf(inputs[0].out) : ctx.inputs;
         const pass = !!runInNewContext(`(${node.data.expression})`, { output: upstream, input, trigger: ctx.trigger, nodes: nodesCtx, JSON, Math, Number, String, Date }, { timeout: 1000 });
         onEvent({ t: 'info', text: `${node.data.expression} → ${pass}`, at: Date.now() });
-        outputs.set(node.id, { text: input, structured: inputs.length === 1 ? inputs[0].out?.structured : undefined, pass });
+        outputs.set(node.id, { text: input, structured: inputs.length === 1 ? inputs[0].out?.structured : undefined, pass, files: upstreamFiles.length ? upstreamFiles : undefined });
         nr.output = outputs.get(node.id);
         setStatus(nr, 'success');
         return true;
+      }
+
+      if (node.kind !== 'agent' && node.kind !== 'orchestrator' && node.kind !== 'condition') {
+        throw new Error(`This version can't run "${node.kind}" steps. Check the node type or update the app.`);
       }
 
       // Agent node, or an LLM-judged condition: both are `claude -p` runs.
@@ -750,7 +980,7 @@ ${input || '(empty)'}`;
           const opts = this.orchestratorOptions(wf, node, prompt, stores, run, onEvent, setStatus, h);
           res = await this.agentTurn(wf, node, nr, run, opts, signal, setStatus, onEvent, stores);
         } else {
-          res = await this.agentTurn(wf, node, nr, run, this.agentOptions(d, prompt, stores, run), signal, setStatus, onEvent, stores);
+          res = await this.agentTurn(wf, node, nr, run, this.agentOptions(d, prompt, stores, run, this.datasetsFor(wf, node)), signal, setStatus, onEvent, stores);
         }
       }
 
@@ -766,6 +996,7 @@ ${input || '(empty)'}`;
         out.reason = s?.reason;
         out.text = input; // conditions pass their input through unchanged
         out.structured = inputs.length === 1 ? inputs[0].out?.structured : undefined;
+        if (upstreamFiles.length) out.files = upstreamFiles;
         onEvent({ t: 'info', text: `Judge: ${out.pass ? 'yes' : 'no'} — ${s?.reason ?? ''}`, at: Date.now() });
       }
       outputs.set(node.id, out);
@@ -810,6 +1041,8 @@ ${input || '(empty)'}`;
     const maxRounds = reviseMode ? Math.max(1, Number(d.maxRounds) || 3) : 1;
     let content = input;
     let structured = inputs.length === 1 ? inputs[0].out?.structured : undefined;
+    const filesOf = (ins: Array<{ out?: NodeOutput }>) => ins.flatMap((i) => i.out?.files ?? []).filter((f, i, a) => a.findIndex((x) => x.id === f.id) === i);
+    let files = filesOf(inputs);
 
     for (let round = 1; ; round++) {
       setStatus(nr, 'waiting');
@@ -828,6 +1061,7 @@ ${input || '(empty)'}`;
           // Tells the UI what "reject" will do this round.
           reviseTo: reviseMode && round < maxRounds ? reviseAgent!.data?.name || reviseAgent!.id : undefined,
           maxRounds: reviseMode ? maxRounds : undefined,
+          files: files.length ? files : undefined,
         },
         { signal, timeoutMinutes: d.timeoutMinutes, notify: d.notify, onNotify: (text, ok) => onEvent({ t: ok ? 'info' : 'error', text, at: Date.now() }) },
       );
@@ -842,6 +1076,7 @@ ${input || '(empty)'}`;
         if (fresh?.length) {
           content = joinInputs(fresh);
           structured = fresh.length === 1 ? fresh[0].out?.structured : undefined;
+          files = filesOf(fresh);
           continue;
         }
         onEvent({ t: 'error', text: 'The revision failed; treating this as rejected.', at: Date.now() });
@@ -850,7 +1085,7 @@ ${input || '(empty)'}`;
       }
 
       const note = comment ? `\n\n## Reviewer ${approved ? 'note' : 'feedback'}\n${comment}` : '';
-      const out: NodeOutput = { text: `${content}${note}`, structured: note ? undefined : structured, pass: approved, reason: comment || undefined };
+      const out: NodeOutput = { text: `${content}${note}`, structured: note ? undefined : structured, pass: approved, reason: comment || undefined, files: files.length ? files : undefined };
       outputs.set(node.id, out);
       nr.output = out;
       setStatus(nr, 'success');

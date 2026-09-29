@@ -16,6 +16,10 @@ import { ExportService } from './export/export.service';
 import { FilesController } from './output/files.controller';
 import { MemoryController } from './memory/memory.controller';
 import { MemoryService } from './memory/memory.service';
+import { DatasetsController } from './datasets/datasets.controller';
+import { DatasetsService } from './datasets/datasets.service';
+import { PluginsController } from './plugins/plugins.controller';
+import { PluginsService } from './plugins/plugins.service';
 import { SystemController } from './system/system.controller';
 import { HooksController } from './triggers/hooks.controller';
 import { TriggersService } from './triggers/triggers.service';
@@ -31,7 +35,7 @@ const staticImports: DynamicModule[] = existsSync(join(clientDist, 'index.html')
 
 @Module({
   imports: [...staticImports],
-  controllers: [WorkflowsController, RunsController, HooksController, SystemController, MemoryController, FilesController, DashboardController, ReviewPageController, NotifyTestController],
-  providers: [WorkflowsService, RunsStore, EventBus, ProcessQueue, ClaudeCliService, ExecutorService, InboxService, MemoryService, ActionsService, TriggersService, ExportService],
+  controllers: [WorkflowsController, RunsController, HooksController, SystemController, MemoryController, FilesController, DashboardController, ReviewPageController, NotifyTestController, PluginsController, DatasetsController],
+  providers: [WorkflowsService, RunsStore, EventBus, ProcessQueue, ClaudeCliService, ExecutorService, InboxService, MemoryService, ActionsService, TriggersService, ExportService, PluginsService, DatasetsService],
 })
 export class AppModule {}

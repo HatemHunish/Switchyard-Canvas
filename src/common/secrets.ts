@@ -36,3 +36,14 @@ export async function getSecret(name: string): Promise<string | null> {
   if (!existsSync(FILE)) return null;
   return JSON.parse(readFileSync(FILE, 'utf8'))[name] ?? null;
 }
+
+export async function deleteSecret(name: string): Promise<void> {
+  if (process.platform === 'darwin') {
+    await run('security', ['delete-generic-password', '-s', SERVICE, '-a', name]).catch(() => undefined);
+    return;
+  }
+  if (!existsSync(FILE)) return;
+  const all = JSON.parse(readFileSync(FILE, 'utf8'));
+  delete all[name];
+  writeFileSync(FILE, JSON.stringify(all), { mode: 0o600 });
+}

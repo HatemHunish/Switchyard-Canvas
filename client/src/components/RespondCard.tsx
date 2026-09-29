@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { openViewer } from '../lib/viewer';
 import { api, ApiError } from '../api';
 import type { HumanRequest } from '../types';
 
@@ -69,6 +70,16 @@ export function RespondCard({ request, showSource, onOpen, notify }: Props) {
       )}
       {review && request.instructions && <p className="respond-instr">{request.instructions}</p>}
       {review ? <pre className="text respond-body">{request.body}</pre> : <p className="respond-q">{request.body}</p>}
+      {review && request.files?.length ? (
+        <div className="respond-files">
+          <span className="muted small">Files to check:</span>
+          {request.files.map((f, i) => (
+            <button key={f.id} className="chip-sm file-chip" onClick={() => openViewer(request.files!, i)} title={`Preview ${f.name}`}>
+              📄 {f.name}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <textarea
         rows={review ? 2 : 3}
         value={text}

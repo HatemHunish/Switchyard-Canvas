@@ -109,7 +109,10 @@ function tryJson(t: string): unknown {
 
 // ---------- HTML / PDF ----------
 
-const CSS = `
+/** Each block picks its own direction, so an Arabic line in an English document reads right to left (and vice versa). */
+export const autoDir = (html: string) => html.replace(/<(p|li|h[1-6]|td|th|blockquote|dt|dd|figcaption)(\s[^>]*)?>/gi, (m, tag, attrs = '') => (/\sdir=/i.test(attrs) ? m : `<${tag}${attrs} dir="auto">`));
+
+export const DOC_CSS = `
   @page { size: A4; margin: 18mm 16mm; }
   :root { --ink:#1b1f24; --muted:#5b6573; --line:#dfe3e8; --accent:#c4613f; }
   body { font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, "Geeza Pro", "Arial Unicode MS", sans-serif; color: var(--ink); line-height: 1.55; font-size: 11pt; max-width: 820px; margin: 0 auto; padding: 24px; }
@@ -134,9 +137,9 @@ export function toHtml(input: ConvertInput): string {
   const md = unwrapFence(input.text);
   const title = titleOf(input);
   const rtl = isRtl(md);
-  const body = marked.parse(md, { async: false }) as string;
+  const body = autoDir(marked.parse(md, { async: false }) as string);
   const withTitle = /^\s*<h1/i.test(body) ? body : `<h1>${escape(title)}</h1>\n${body}`;
-  return `<!doctype html><html lang="${rtl ? 'ar' : 'en'}" dir="${rtl ? 'rtl' : 'ltr'}"><head><meta charset="utf-8"><title>${escape(title)}</title><style>${CSS}</style></head><body>${withTitle}<div class="meta">${new Date().toLocaleString()}</div></body></html>`;
+  return `<!doctype html><html lang="${rtl ? 'ar' : 'en'}" dir="${rtl ? 'rtl' : 'ltr'}"><head><meta charset="utf-8"><!-- Content can come from the web through agents: never run its scripts (an alert() would also block PDF printing). --><meta http-equiv="Content-Security-Policy" content="script-src 'none'; object-src 'none'; frame-src 'none'"><title>${escape(title)}</title><style>${DOC_CSS}</style></head><body>${withTitle}<div class="meta">${new Date().toLocaleString()}</div></body></html>`;
 }
 
 const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

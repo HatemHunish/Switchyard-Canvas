@@ -26,6 +26,10 @@ export interface CliRunOptions {
   askTool?: boolean;
   /** Connected memory stores: searchable ones, and the one notes are saved to (if writable). */
   memory?: { search: string[]; write?: string; runId?: string };
+  /** Connected datasets (dataset_* tools). */
+  datasets?: string[];
+  /** Plugin tools with their schemas (served by the same MCP server, run by the app). */
+  pluginTools?: Array<{ name: string; description: string; inputSchema: unknown }>;
   /** Subagents this session may delegate to (orchestrator nodes). */
   agents?: Record<string, { description: string; prompt: string; tools?: string[]; model?: string }>;
   /** Extra environment variables for the CLI process. */
@@ -100,6 +104,8 @@ export class ClaudeCliService {
       ...(o.askTool ? ['ask_user'] : []),
       ...(o.memory?.search.length ? ['memory_search'] : []),
       ...(o.memory?.write ? ['memory_save'] : []),
+      ...(o.datasets?.length ? ['dataset_search', 'dataset_stats', 'dataset_top'] : []),
+      ...(o.pluginTools ?? []).map((t) => t.name),
     ];
     const allowed = [...(o.allowedTools ?? []), ...appTools.map((t) => `mcp__agent_canvas__${t}`)];
     if (allowed.length) args.push('--allowedTools', allowed.join(','));
@@ -111,6 +117,8 @@ export class ClaudeCliService {
         AC_SEARCH_STORES: JSON.stringify(o.memory?.search ?? []),
         AC_WRITE_STORE: o.memory?.write ?? '',
         AC_RUN_ID: o.memory?.runId ?? '',
+        AC_DATASETS: JSON.stringify(o.datasets ?? []),
+        AC_EXTRA_TOOLS: JSON.stringify(o.pluginTools ?? []),
       };
       args.push('--mcp-config', JSON.stringify({ mcpServers: { agent_canvas: { command: process.execPath, args: [TOOLS_SERVER], env } } }));
     }

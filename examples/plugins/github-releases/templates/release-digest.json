@@ -1,0 +1,26 @@
+{
+  "name": "Release digest",
+  "description": "Every morning: new releases of the repositories you follow, summarised for the team.",
+  "nodes": [
+    { "id": "morning", "kind": "trigger.schedule", "position": { "x": 0, "y": 0 }, "data": { "mode": "cron", "cron": "0 8 * * *", "everyMinutes": 60 } },
+    {
+      "id": "releases",
+      "kind": "source",
+      "label": "Releases",
+      "position": { "x": 300, "y": 0 },
+      "data": { "plugin": "github-releases", "source": "releases", "config": { "repos": ["anthropics/claude-code"], "prereleases": false }, "dataset": "Releases", "onlyNew": true, "stopIfEmpty": true, "continueOnError": false, "limit": 50 }
+    },
+    {
+      "id": "summary",
+      "kind": "agent",
+      "position": { "x": 600, "y": 0 },
+      "data": { "name": "release-summarizer", "prompt": "Summarise these new releases for the team: for each, the 3 most important changes and anything that could break us.", "model": "haiku", "effort": "", "allowedTools": [], "disallowedTools": [], "permissionMode": "dontAsk", "cwd": "~" }
+    },
+    { "id": "ping", "kind": "action", "position": { "x": 900, "y": 0 }, "data": { "action": "notify", "title": "New releases", "message": "{{nodes.releases.output.newCount}} new release(s)" } }
+  ],
+  "edges": [
+    { "id": "e1", "source": "morning", "target": "releases", "sourceHandle": null },
+    { "id": "e2", "source": "releases", "target": "summary", "sourceHandle": null },
+    { "id": "e3", "source": "summary", "target": "ping", "sourceHandle": null }
+  ]
+}

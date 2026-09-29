@@ -1,6 +1,7 @@
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { memo } from 'react';
-import { FORMATS, isAgentLike, isBranching, isTrigger, metaOf, subtitle } from '../../lib/nodeMeta';
+import { FORMATS, isAgentLike, isBranching, isStore, isTrigger, metaOf, subtitle } from '../../lib/nodeMeta';
+import { usePlugins } from '../../lib/plugins';
 import type { NodeKind, NodeRun } from '../../types';
 
 export type FlowData = {
@@ -33,9 +34,11 @@ function duration(run?: FlowData['run']) {
 }
 
 function FlowNodeImpl({ data, selected }: NodeProps<FlowNodeType>) {
+  // Source titles/icons come from the plugin catalog, which loads after the canvas.
+  usePlugins();
   const meta = metaOf(data.kind, data.config);
   const title =
-    isAgentLike(data.kind) || data.kind === 'memory'
+    isAgentLike(data.kind) || isStore(data.kind)
       ? data.config.name || meta.title
       : data.kind === 'human'
         ? data.config.title || data.label || meta.title
@@ -45,13 +48,22 @@ function FlowNodeImpl({ data, selected }: NodeProps<FlowNodeType>) {
   const status = data.run?.status;
   const condition = isBranching(data.kind);
   const passed = condition && status === 'success' ? data.run?.output?.pass : undefined;
+  const st = data.run?.output?.structured as { newCount?: number; count?: number } | undefined;
+  const counts =
+    status === 'success' && st && typeof st === 'object'
+      ? data.kind === 'source' && typeof st.newCount === 'number'
+        ? `${st.newCount} new`
+        : data.kind === 'insight' && typeof st.count === 'number'
+          ? `${st.count} labelled`
+          : ''
+      : '';
 
   return (
     <div
       className={`fnode kind-${data.kind.replace('.', '-')} ${selected ? 'selected' : ''} ${status ? `st-${status}` : ''}`}
       style={{ ['--kind' as string]: meta.color }}
     >
-      {!isTrigger(data.kind) && data.kind !== 'memory' && <Handle type="target" position={Position.Left} />}
+      {!isTrigger(data.kind) && !isStore(data.kind) && <Handle type="target" position={Position.Left} />}
       <div className="fnode-head">
         <span className="fnode-icon" aria-hidden>
           {meta.icon}
@@ -74,6 +86,7 @@ function FlowNodeImpl({ data, selected }: NodeProps<FlowNodeType>) {
           <span className={`fnode-status st-${status}`}>
             {status === 'running' && <span className="spinner" />}
             {passed !== undefined ? (data.kind === 'human' ? (passed ? 'approved' : 'rejected') : passed ? 'yes' : 'no') : STATUS_TEXT[status]}
+            {counts && ` · ${counts}`}
             {duration(data.run) && ` · ${duration(data.run)}`}
           </span>
         )}
@@ -91,8 +104,8 @@ function FlowNodeImpl({ data, selected }: NodeProps<FlowNodeType>) {
             </>
           )}
         </>
-      ) : data.kind === 'memory' ? (
-        <Handle type="source" position={Position.Bottom} className="h-memory" />
+      ) : isStore(data.kind) ? (
+        <Handle type="source" position={Position.Bottom} className={`h-memory ${data.kind === 'dataset' ? 'h-dataset' : ''}`} />
       ) : (
         <Handle type="source" position={Position.Right} />
       )}

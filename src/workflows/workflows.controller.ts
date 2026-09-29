@@ -4,6 +4,7 @@ import { ExecutorService } from '../engine/executor.service';
 import { RunsStore } from '../engine/runs.store';
 import { ExportService } from '../export/export.service';
 import { MemoryService, storeIdFor } from '../memory/memory.service';
+import { PluginsService } from '../plugins/plugins.service';
 import { TEMPLATES } from '../templates/templates';
 import { TriggersService } from '../triggers/triggers.service';
 import { validateWorkflow } from './validate';
@@ -35,6 +36,7 @@ export class WorkflowsController {
     private readonly store: RunsStore,
     private readonly exporter: ExportService,
     private readonly memory: MemoryService,
+    private readonly plugins: PluginsService,
   ) {}
 
   private view(wf: Workflow) {
@@ -96,14 +98,19 @@ export class WorkflowsController {
     return this.exporter.exportAgents(this.workflows.get(id), body.dir, body.nodeIds);
   }
 
+  /** Built-in templates plus those shipped by enabled folder plugins. */
+  private allTemplates() {
+    return [...TEMPLATES, ...this.plugins.templates().map((t) => ({ ...t, pattern: 'plugin' as const }))];
+  }
+
   @Get('templates')
   templates() {
-    return TEMPLATES.map(({ key, name, description, pattern, nodes }) => ({ key, name, description, pattern, nodeCount: nodes.length }));
+    return this.allTemplates().map(({ key, name, description, pattern, nodes }) => ({ key, name, description, pattern, nodeCount: nodes.length }));
   }
 
   @Post('templates/:key')
   fromTemplate(@Param('key') key: string) {
-    const t = TEMPLATES.find((x) => x.key === key);
+    const t = this.allTemplates().find((x) => x.key === key);
     if (!t) throw new NotFoundException('Unknown template');
     return this.view(this.workflows.create({ name: t.name, description: t.description, nodes: structuredClone(t.nodes), edges: structuredClone(t.edges) }));
   }

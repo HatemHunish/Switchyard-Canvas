@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
+import { openViewer } from '../lib/viewer';
 import type { NodeEvent, NodeRun } from '../types';
 
 function EventRow({ e }: { e: NodeEvent }) {
@@ -25,7 +26,9 @@ function EventRow({ e }: { e: NodeEvent }) {
   return <div className={`ev ev-${e.t}`}>{e.text}</div>;
 }
 
-export function RunOutput({ nodeRun }: { nodeRun: NodeRun }) {
+/** preferText: steps whose text is the readable digest and whose data is for conditions (sources, insights). */
+export function RunOutput({ nodeRun, preferText }: { nodeRun: NodeRun; preferText?: boolean }) {
+  const [asData, setAsData] = useState(false);
   const [tab, setTab] = useState<'output' | 'activity' | 'prompt'>(nodeRun.status === 'running' ? 'activity' : 'output');
   const logRef = useRef<HTMLDivElement>(null);
 
@@ -65,12 +68,15 @@ export function RunOutput({ nodeRun }: { nodeRun: NodeRun }) {
                 <li key={f.id}>
                   <div className="file-top">
                     <span className="file-fmt">{f.format}</span>
-                    <a href={`/api/files/${f.id}`} target="_blank" rel="noreferrer" title={f.path}>
+                    <button className="linkish file-name" onClick={() => openViewer(out.files!, out.files!.indexOf(f))} title={`Preview ${f.path}`}>
                       {f.name}
-                    </a>
+                    </button>
                     <span className="muted small">{Math.max(1, Math.round(f.bytes / 1024))} KB</span>
                   </div>
                   <div className="file-actions">
+                  <button className="linkbtn" onClick={() => openViewer(out.files!, out.files!.indexOf(f))}>
+                    View
+                  </button>
                   <button className="linkbtn" onClick={() => api.openFile(f.id, 'open')}>
                     Open
                   </button>
@@ -92,7 +98,12 @@ export function RunOutput({ nodeRun }: { nodeRun: NodeRun }) {
               {out.reason ? `: ${out.reason}` : ''}
             </div>
           )}
-          {out?.structured !== undefined ? (
+          {preferText && out?.text && out.structured !== undefined && (
+            <button className="linkbtn small" onClick={() => setAsData(!asData)}>
+              {asData ? 'Show digest' : 'Show data (for conditions)'}
+            </button>
+          )}
+          {out?.structured !== undefined && (!preferText || asData || !out.text) ? (
             <pre className="code">{JSON.stringify(out.structured, null, 2)}</pre>
           ) : out?.text ? (
             <pre className="text">{out.text}</pre>

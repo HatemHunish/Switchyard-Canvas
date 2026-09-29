@@ -48,7 +48,7 @@ export class RunsController {
   events(@Query('workflowId') workflowId?: string): Observable<MessageEvent> {
     const events = this.bus.events$.pipe(
       filter((e) => {
-        if (!workflowId || e.type === 'usage') return true;
+        if (!workflowId || e.type === 'usage' || e.type === 'dataset') return true;
         if (e.type === 'run') return e.run.workflowId === workflowId;
         if (e.type === 'inbox') return e.request.workflowId === workflowId;
         return e.workflowId === workflowId;

@@ -4,11 +4,22 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, type ClaudeStatus, type Settings, type TemplateInfo, type WorkflowView } from './api';
 import { Dashboard } from './components/dashboard/Dashboard';
 import { Editor } from './components/Editor';
+import { FileViewer } from './components/FileViewer';
+import { datasetIdFor, Insights } from './components/insights/Insights';
+import { PluginsPage } from './components/PluginsPage';
 import { RespondCard } from './components/RespondCard';
 import { subscribe } from './lib/live';
 import type { HumanRequest, UsageInfo } from './types';
 
-const PATTERN_LABEL = { monitor: 'Monitor', triggered: 'Triggered', pipeline: 'Pipeline', human: 'With approval', memory: 'Memory / RAG', orchestrator: 'Orchestrator', output: 'Files & actions' } as const;
+const PATTERN_LABEL = { monitor: 'Monitor', triggered: 'Triggered', pipeline: 'Pipeline', human: 'With approval', memory: 'Memory / RAG', orchestrator: 'Orchestrator', output: 'Files & actions', insights: 'Media & insights', plugin: 'Plugin' } as const;
+
+type View = 'dashboard' | 'workflows' | 'insights' | 'plugins';
+const VIEWS: Array<{ id: View; label: string }> = [
+  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'workflows', label: 'Workflows' },
+  { id: 'insights', label: 'Insights' },
+  { id: 'plugins', label: 'Plugins' },
+];
 
 function ClaudeBadge({ status, onRefresh }: { status: ClaudeStatus | null; onRefresh: () => void }) {
   if (!status) return <span className="badge">Checking Claude Code…</span>;
@@ -214,13 +225,15 @@ export default function App() {
   const [inbox, setInbox] = useState<HumanRequest[]>([]);
   const [showInbox, setShowInbox] = useState(false);
   const [focus, setFocus] = useState<{ runId: string; nodeId?: string; nonce: number }>();
-  const [view, setView] = useState<'dashboard' | 'workflows'>(() => {
+  const [view, setView] = useState<View>(() => {
     try {
-      return (localStorage.getItem('ac.view') as 'dashboard' | 'workflows') || 'dashboard';
+      const v = localStorage.getItem('ac.view') as View;
+      return VIEWS.some((x) => x.id === v) ? v : 'dashboard';
     } catch {
       return 'dashboard';
     }
   });
+  const [insightsFor, setInsightsFor] = useState<string>();
   useEffect(() => {
     try {
       localStorage.setItem('ac.view', view);
@@ -369,12 +382,11 @@ export default function App() {
           <span className="logo">✦</span> Agent Canvas
         </div>
         <nav className="tabs-main" aria-label="Main">
-          <button className={view === 'dashboard' ? 'on' : ''} aria-current={view === 'dashboard' ? 'page' : undefined} onClick={() => setView('dashboard')}>
-            Dashboard
-          </button>
-          <button className={view === 'workflows' ? 'on' : ''} aria-current={view === 'workflows' ? 'page' : undefined} onClick={() => setView('workflows')}>
-            Workflows
-          </button>
+          {VIEWS.map((v) => (
+            <button key={v.id} className={view === v.id ? 'on' : ''} aria-current={view === v.id ? 'page' : undefined} onClick={() => setView(v.id)}>
+              {v.label}
+            </button>
+          ))}
         </nav>
         <span className="spacer" />
         <UsageMeter usage={usage} queue={queue} />
@@ -387,7 +399,23 @@ export default function App() {
         </button>
       </header>
 
-      {view === 'dashboard' ? (
+      {view === 'insights' ? (
+        <div className="main dash-main">
+          <Insights
+            initial={insightsFor}
+            templates={templates}
+            notify={notify}
+            onTemplate={(key) => {
+              setView('workflows');
+              void createFromTemplate(key);
+            }}
+          />
+        </div>
+      ) : view === 'plugins' ? (
+        <div className="main dash-main">
+          <PluginsPage notify={notify} />
+        </div>
+      ) : view === 'dashboard' ? (
         <div className="main dash-main">
           <Dashboard
             inbox={inbox}
@@ -459,6 +487,11 @@ export default function App() {
                 onDirty={onDirty}
                 inbox={inbox}
                 focus={focus}
+                onOpenPlugins={() => setView('plugins')}
+                onOpenInsights={(name) => {
+                  setInsightsFor(datasetIdFor(name));
+                  setView('insights');
+                }}
                 onSaved={(wf) => setWorkflows((ws) => ws.map((w) => (w.id === wf.id ? wf : w)))}
                 onDelete={async () => {
                   await api.deleteWorkflow(current.id);
@@ -539,6 +572,7 @@ export default function App() {
         </aside>
       )}
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} notify={notify} />}
+      <FileViewer />
       {toast && (
         <div className={`toast ${toast.kind}`} role="status">
           {toast.msg}

@@ -1,6 +1,6 @@
 # Agent Canvas
 
-Build Claude agents visually and run them on your **Claude subscription**: monitors on a schedule, agents triggered by files or webhooks, and multi-step pipelines.
+Build Claude agents visually and run them on your **Claude subscription**: monitors on a schedule, agents triggered by files or webhooks, multi-step pipelines, and media trackers that collect posts, news, reviews and trends into datasets with insights.
 
 Every agent step runs through the **Claude Code CLI installed on your machine** (`claude -p`), using the account you logged into yourself. The app never asks for, stores or sees credentials, and it doesn't need an API key.
 
@@ -50,11 +50,23 @@ Everything updates live. Charts follow the bundled dataviz guidance. Completed r
 | **Condition** | Branches **yes/no**, either with a JS rule (`output.severity === 'high'`) or by asking Claude a yes/no question |
 | **Merge** | Joins parallel branches: wait for all of them, or continue on the first one |
 | **Memory** | A context store, not a step. Connect it to agents (from its bottom handle to an agent's top handle). It holds **notes** (facts agents save, answers you gave) and **documents** indexed from files and folders (RAG). Agents get `memory_search` / `memory_save` tools, and notes can be put into their context up front. Scope it to one workflow, or share it across workflows by name |
+| **Source** | Collects items from a **plugin**: Google News, RSS, App Store reviews, Google Trends, Reddit, Hacker News, YouTube, Instagram & Facebook, TikTok, X, any web page (change watch), any JSON API, Apify actors, or your own plugin. Items are de-duplicated into a named **dataset**; the step passes on a digest of what's new (`output.newCount`, `output.items`). Fetching uses no Claude usage. *Stop if nothing new* skips the rest of the run; *Keep going if this source fails* lets one flaky platform fail alone |
+| **Insight** | Labels new dataset items with Claude (haiku by default, 25 per call): sentiment, topics, relevance to your brief, entities, language, a one-line summary, and custom fields. Its output (`count`, `avgSentiment`, `negativeShare`, `topTopics`, `mostNegative`…) can drive a Condition, e.g. alert when negative mentions spike |
+| **Dataset** | A store, like Memory: connect it to an agent's top handle and the agent gets `dataset_stats`, `dataset_search` and `dataset_top` to analyse what the sources collected |
 | **Human review** | Pauses the run for your **Approve / Reject** (with an optional comment). Approve → green "yes" output. To revise on reject, drag the orange **↩ revise** handle back to any earlier agent: it gets your feedback in its own session (and can ask you questions), every step between it and the review runs again, and you review the new result, up to N rounds. Otherwise reject takes the red "no" path. An optional time limit counts as a rejection |
 
 Each step receives the previous step's output as `{{input}}`. If the prompt doesn't place `{{input}}` itself, the input is appended automatically. Other variables: `{{trigger.payload.*}}`, `{{nodes.<name>.output}}`, `{{date}}`.
 
 Schedule, file and webhook triggers only fire while the workflow is **Enabled** and the app is running.
+
+## Plugins, sources and insights
+
+- **Plugins** (top bar → Plugins) add Sources, agent tools (e.g. `news_search`, `trends_interest`, `reddit_search`, `youtube_search`, `hn_search`) and Insights panels. Turn them on or off, add keys (stored in the macOS Keychain) and test the connection there. Each Source node has **Fetch sample** to preview what it returns before you run anything.
+- No key needed: RSS & News (feeds, Google News search, App Store reviews), Google Trends (daily trending; interest over time uses Google's unofficial endpoint, or SerpApi with a key), Reddit (RSS; app credentials add scores and comments), Hacker News, Web page watch, HTTP JSON.
+- With your own keys: YouTube (Data API key), X (paid API tier), Instagram & Facebook (Meta Graph token: **only accounts and Pages you manage**, plus Instagram hashtag search), TikTok (your own account only), Apify (public social data from third-party scrapers; you're responsible for each platform's terms).
+- **Insights** (top bar) charts each dataset: items per day by source, sentiment, top topics and authors, followers/subscribers/search interest over time, the most engaging items, and a searchable feed, with a CSV export. It updates live while workflows run.
+- Templates: *Brand mention monitor*, *Trend radar → content ideas*, *Weekly social media report*, *Competitor watch*, *App review digest*.
+- Write your own plugin: a folder with `plugin.json` and `index.js` in `~/.agent-canvas/plugins/`. See [docs/plugins.md](docs/plugins.md) and the example in `examples/plugins/github-releases/`. Folder plugins start turned off, because they run code with your permissions.
 
 ## Human in the loop
 
@@ -89,6 +101,8 @@ Schedule, file and webhook triggers only fire while the workflow is **Enabled** 
 - Email through the **Mail app** uses the accounts set up there, with no password stored in this app. macOS asks once to allow controlling Mail. By default it opens a draft for you to check; "Send immediately" sends without asking.
 - Email through **SMTP** is configured in Settings, and the password is kept in the macOS Keychain. SMTP always sends immediately, so put a Human review before it if you want to check first.
 - Webhooks send the text and file *names/paths*. The files themselves stay on this Mac; use Email to send them.
+- **Viewer:** click any produced file (in a step's *Last run*, the dashboard's *Latest files*, or a review card) to preview it in the app: PDF, Markdown, Word (.docx, and .doc/.rtf/.odt on macOS), Excel (every sheet), PowerPoint (slides with text and pictures), CSV/TSV, JSON, HTML, images, audio, video, code and any other text file. Use ← → to step through a run's files. Previews are rendered as sandboxed pages (no scripts run), because content can come from the web through agents.
+- Files flow through Condition, Merge and Human review steps, so *Output → Review → Email* attaches the file you approved; the review card shows it.
 - The UI can only download files that a run produced (looked up by id), never arbitrary paths.
 
 ## Safety defaults
@@ -103,6 +117,8 @@ Schedule, file and webhook triggers only fire while the workflow is **Enabled** 
 - `~/.agent-canvas/workflows/*.json`: one JSON file per workflow (also downloadable or importable from the UI)
 - `~/.agent-canvas/runs.db`: run history (SQLite), including each step's prompt, output, activity and session id
 - `~/.agent-canvas/memory.db`: memory stores (notes and indexed document chunks)
+- `~/.agent-canvas/datasets.db`: datasets (collected items, labels, time series) and each source's cursor
+- `~/.agent-canvas/plugins/`: your own plugins
 - `~/.agent-canvas/outputs/`: files made by Output nodes (default location)
 - Each agent step is a normal Claude Code session. Continue it in your terminal with the `claude --resume <id>` command shown in the step's **Last run** tab.
 

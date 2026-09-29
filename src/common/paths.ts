@@ -6,9 +6,11 @@ import { join } from 'path';
 export const DATA_DIR = process.env.AGENT_CANVAS_HOME || join(homedir(), '.agent-canvas');
 export const WORKFLOWS_DIR = join(DATA_DIR, 'workflows');
 export const DB_PATH = join(DATA_DIR, 'runs.db');
+export const PLUGINS_DIR = join(DATA_DIR, 'plugins');
 const SETTINGS_PATH = join(DATA_DIR, 'settings.json');
 
 mkdirSync(WORKFLOWS_DIR, { recursive: true });
+mkdirSync(PLUGINS_DIR, { recursive: true });
 
 export interface Settings {
   /** Max `claude` processes running at once (they share one subscription). */
@@ -27,6 +29,8 @@ export interface Settings {
   publicUrl: string;
   /** Outgoing mail for Email actions set to SMTP. The password lives in the Keychain. */
   smtp: { host: string; port: number; secure: boolean; user: string; from: string };
+  /** Per-plugin switches. Built-ins default on; plugins from the folder default off until you enable them. */
+  plugins: Record<string, { enabled?: boolean }>;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -38,13 +42,14 @@ const DEFAULT_SETTINGS: Settings = {
   chromePath: '',
   publicUrl: '',
   smtp: { host: '', port: 587, secure: false, user: '', from: '' },
+  plugins: {},
 };
 
 export function loadSettings(): Settings {
   if (!existsSync(SETTINGS_PATH)) return { ...DEFAULT_SETTINGS };
   try {
     const saved = JSON.parse(readFileSync(SETTINGS_PATH, 'utf8'));
-    return { ...DEFAULT_SETTINGS, ...saved, smtp: { ...DEFAULT_SETTINGS.smtp, ...saved.smtp } };
+    return { ...DEFAULT_SETTINGS, ...saved, smtp: { ...DEFAULT_SETTINGS.smtp, ...saved.smtp }, plugins: { ...saved.plugins } };
   } catch {
     return { ...DEFAULT_SETTINGS };
   }

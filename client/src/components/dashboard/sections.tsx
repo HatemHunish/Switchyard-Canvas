@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
+import { openViewer } from '../../lib/viewer';
 import type { AttentionItem, DashKpis, DashSummary, FileRow, HealthRow, LiveRun, RunFilters, RunRow, UpcomingItem } from '../../api';
 import { ago, clock, dur, money, pct, STATUS_ICON, until } from '../../lib/format';
 import { HBars, Meter, RunsPerDay, Sparkline } from './charts';
@@ -323,9 +324,9 @@ export function LatestFiles({ files, nav, onOpenFile }: { files: FileRow[]; nav:
           <li key={f.id}>
             <span className="file-fmt">{f.format}</span>
             <div className="dfile-main">
-              <a href={`/api/files/${f.id}`} target="_blank" rel="noreferrer" title={f.path}>
+              <button className="linkish file-name" onClick={() => openViewer(files, files.indexOf(f))} title={`Preview ${f.path}`}>
                 {f.name}
-              </a>
+              </button>
               <span className="muted small">
                 <button className="linkish" onClick={() => nav.openRun(f.workflowId, f.runId, f.nodeId)}>
                   {f.workflowName}
@@ -333,6 +334,9 @@ export function LatestFiles({ files, nav, onOpenFile }: { files: FileRow[]; nav:
                 · <span title={clock(f.createdAt)}>{ago(f.createdAt)}</span> · {Math.max(1, Math.round(f.bytes / 1024))} KB
               </span>
             </div>
+            <button className="linkbtn" onClick={() => openViewer(files, files.indexOf(f))}>
+              View
+            </button>
             <button className="linkbtn" onClick={() => onOpenFile(f.id, 'open')}>
               Open
             </button>

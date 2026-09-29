@@ -217,6 +217,16 @@ export class RunsStore implements OnModuleDestroy {
       .slice(0, limit);
   }
 
+  /** A file with where it came from, for the viewer. */
+  fileInfo(id: string) {
+    return this.db
+      .prepare(
+        `SELECT f.id, f.path, f.name, f.format, f.bytes, f.created_at AS createdAt, f.run_id AS runId, f.node_id AS nodeId, f.workflow_id AS workflowId, r.workflow_name AS workflowName
+         FROM files f LEFT JOIN runs r ON r.id = f.run_id WHERE f.id = ?`,
+      )
+      .get(id) as (OutputFile & { createdAt: number; runId: string; nodeId: string; workflowId: string; workflowName?: string }) | undefined;
+  }
+
   getRun(id: string): { run: Run; nodes: NodeRun[] } | null {
     const row = this.db.prepare(`SELECT * FROM runs WHERE id = ?`).get(id);
     if (!row) return null;

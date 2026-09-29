@@ -7,10 +7,12 @@ import { MemoryPanel } from './MemoryPanel';
 import { NotifyEditor } from './NotifyEditor';
 import { RespondCard } from './RespondCard';
 import { RunOutput } from './RunOutput';
+import { DatasetFields, InsightFields, PluginToolsPicker, SourceFields } from './SourceInspector';
 
 interface Props {
   node: FlowNodeType;
   workflowId: string;
+  workflowName: string;
   webhookToken: string;
   saved: boolean;
   nodeRun?: NodeRun;
@@ -30,6 +32,8 @@ interface Props {
   onLabel: (label: string) => void;
   onDelete: () => void;
   onRun: () => void;
+  onOpenPlugins: () => void;
+  onOpenInsights: (dataset: string) => void;
 }
 
 function Field({ label, hint, children }: { label: string; hint?: React.ReactNode; children: React.ReactNode }) {
@@ -98,7 +102,7 @@ function copy(text: string) {
   void navigator.clipboard?.writeText(text);
 }
 
-export function Inspector({ node, workflowId, webhookToken, saved, nodeRun, trigger, issues, pending, loopTarget, team, workerOf, onSelectNode, notify, onChange, onLabel, onDelete, onRun }: Props) {
+export function Inspector({ node, workflowId, workflowName, webhookToken, saved, nodeRun, trigger, issues, pending, loopTarget, team, workerOf, onSelectNode, notify, onChange, onLabel, onDelete, onRun, onOpenPlugins, onOpenInsights }: Props) {
   const d = node.data.config;
   const kind = node.data.kind;
   const meta = metaOf(kind, d);
@@ -134,7 +138,7 @@ export function Inspector({ node, workflowId, webhookToken, saved, nodeRun, trig
         </div>
       )}
 
-      {kind !== 'memory' && (
+      {kind !== 'memory' && kind !== 'dataset' && (
         <div className="insp-tabs">
           <button className={tab === 'config' ? 'on' : ''} onClick={() => setTab('config')}>
             Settings
@@ -145,7 +149,7 @@ export function Inspector({ node, workflowId, webhookToken, saved, nodeRun, trig
         </div>
       )}
 
-      {tab === 'run' && hasRun && <RunOutput nodeRun={nodeRun!} />}
+      {tab === 'run' && hasRun && <RunOutput nodeRun={nodeRun!} preferText={kind === 'source' || kind === 'insight'} />}
 
       {tab === 'config' && issues.length > 0 && (
         <ul className="insp-issues">
@@ -157,7 +161,7 @@ export function Inspector({ node, workflowId, webhookToken, saved, nodeRun, trig
 
       {tab === 'config' && (
         <div className="insp-body">
-          {!isAgentLike(kind) && !['human', 'memory', 'output', 'action'].includes(kind) && (
+          {!isAgentLike(kind) && !['human', 'memory', 'output', 'action', 'dataset'].includes(kind) && (
             <Field label="Label">
               <input value={node.data.label ?? ''} placeholder={meta.title} onChange={(e) => onLabel(e.target.value)} />
             </Field>
@@ -248,6 +252,7 @@ export function Inspector({ node, workflowId, webhookToken, saved, nodeRun, trig
               <Field label="Allowed tools" hint="Anything not listed is denied (headless runs never prompt). Empty = no tools.">
                 <ToolsInput value={d.allowedTools ?? []} onChange={(v) => onChange({ allowedTools: v })} suggestions={COMMON_TOOLS} />
               </Field>
+              <PluginToolsPicker value={d.pluginTools ?? []} onChange={(v) => onChange({ pluginTools: v })} />
               <Field label="Blocked tools">
                 <ToolsInput value={d.disallowedTools ?? []} onChange={(v) => onChange({ disallowedTools: v })} />
               </Field>
@@ -622,6 +627,10 @@ export function Inspector({ node, workflowId, webhookToken, saved, nodeRun, trig
               <MemoryPanel workflowId={workflowId} nodeId={node.id} saved={saved} hasSources={!!d.sources?.length} notify={notify} />
             </>
           )}
+
+          {kind === 'source' && <SourceFields config={d} workflowId={workflowId} workflowName={workflowName} nodeId={node.id} onChange={onChange} onOpenPlugins={onOpenPlugins} />}
+          {kind === 'dataset' && <DatasetFields config={d} onChange={onChange} onOpenInsights={onOpenInsights} />}
+          {kind === 'insight' && <InsightFields config={d} workflowName={workflowName} onChange={onChange} />}
 
           {kind === 'merge' && (
             <Field label="Continue when">

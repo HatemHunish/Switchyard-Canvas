@@ -18,7 +18,7 @@ export interface DayPoint {
   cost: number;
 }
 
-interface TipState {
+export interface TipState {
   /** Near the right edge the tooltip opens to the left of the pointer. */
   flip?: boolean;
   x: number;
@@ -27,7 +27,7 @@ interface TipState {
   title: string;
 }
 
-function Tooltip({ tip }: { tip: TipState | null }) {
+export function Tooltip({ tip }: { tip: TipState | null }) {
   if (!tip) return null;
   return (
     <div className={`viz-tip ${tip.flip ? 'flip' : ''}`} style={{ left: tip.x, top: tip.y }} role="status">
@@ -44,7 +44,7 @@ function Tooltip({ tip }: { tip: TipState | null }) {
 }
 
 /** Clean round axis maximum and 2–4 ticks. */
-function niceTicks(max: number): number[] {
+export function niceTicks(max: number): number[] {
   if (max <= 0) return [0, 1];
   const step = max <= 4 ? 1 : max <= 10 ? 2 : max <= 25 ? 5 : max <= 50 ? 10 : Math.pow(10, Math.floor(Math.log10(max))) * (max / Math.pow(10, Math.floor(Math.log10(max))) > 5 ? 2 : 1);
   const top = Math.ceil(max / step) * step;
@@ -54,7 +54,7 @@ function niceTicks(max: number): number[] {
 }
 
 /** Top-rounded column/segment path: 4px radius at the data end, square at the baseline. */
-function colPath(x: number, y: number, w: number, h: number, round: boolean) {
+export function colPath(x: number, y: number, w: number, h: number, round: boolean) {
   const r = round ? Math.min(4, w / 2, h) : 0;
   return `M${x},${y + h} V${y + r} Q${x},${y} ${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h} Z`;
 }

@@ -1,4 +1,4 @@
-import type { HumanRequest, HumanResponse, MemoryItem, MemoryStats, NodeRun, NotifyConfig, Run, UsageInfo, WfEdge, WfNode, Workflow } from './types';
+import type { DatasetItem, HumanRequest, HumanResponse, Item, MemoryItem, MemoryStats, NodeRun, NotifyConfig, Run, UsageInfo, WfEdge, WfNode, Workflow } from './types';
 
 export interface ValidationIssue {
   nodeId?: string;
@@ -21,8 +21,107 @@ export interface TemplateInfo {
   key: string;
   name: string;
   description: string;
-  pattern: 'monitor' | 'triggered' | 'pipeline' | 'human' | 'memory' | 'orchestrator' | 'output';
+  pattern: 'monitor' | 'triggered' | 'pipeline' | 'human' | 'memory' | 'orchestrator' | 'output' | 'insights' | 'plugin';
   nodeCount: number;
+}
+
+export interface PluginField {
+  key: string;
+  label: string;
+  type: 'text' | 'textarea' | 'number' | 'select' | 'list' | 'boolean';
+  required?: boolean;
+  placeholder?: string;
+  help?: string;
+  default?: unknown;
+  options?: Array<string | { value: string; label: string }>;
+}
+
+export interface PluginSource {
+  id: string;
+  title: string;
+  hint?: string;
+  kind?: string;
+  fields: PluginField[];
+  needs?: string[];
+}
+
+export interface PluginInfo {
+  id: string;
+  name: string;
+  version: string;
+  icon?: string;
+  description?: string;
+  notice?: string;
+  homepage?: string;
+  credentials?: Array<{ key: string; label: string; optional?: boolean; help?: string; placeholder?: string }>;
+  sources?: PluginSource[];
+  tools?: Array<{ name: string; description: string }>;
+  insights?: Array<{ title: string; panel: string }>;
+  builtin: boolean;
+  dir?: string;
+  enabled: boolean;
+  error?: string;
+  hasCode: boolean;
+  credentialsSet: Record<string, boolean>;
+}
+
+export interface PluginList {
+  plugins: PluginInfo[];
+  failures: Array<{ dir: string; error: string }>;
+  folder: string;
+}
+
+export interface PluginTool {
+  name: string;
+  description: string;
+  plugin: string;
+  pluginName: string;
+  icon?: string;
+}
+
+export interface SourcePreview {
+  ok: boolean;
+  count?: number;
+  items?: Item[];
+  points?: number;
+  note?: string;
+  error?: string;
+  log: string[];
+  ms: number;
+}
+
+export interface DatasetInfo {
+  id: string;
+  name: string;
+  createdAt: number;
+  items: number;
+  lastItemAt?: number;
+  series: number;
+  sources: string[];
+}
+
+export interface DatasetInsights {
+  kpis: { items: number; newToday: number; avgSentiment: number | null; negative: number; labelled: number; engagement: number; previous?: number };
+  bySource: Array<{ source: string; n: number }>;
+  volume: Array<{ day: string; source: string; n: number }>;
+  sentiment: Array<{ day: string; pos: number; neg: number; neutral: number; avg: number }>;
+  topics: Array<{ topic: string; n: number; avg: number | null }>;
+  authors: Array<{ author: string; n: number; engagement: number }>;
+  top: Array<DatasetItem & { engagement: number }>;
+  feeds: Array<{ source: string; feed: string; label?: string; n: number }>;
+  series: Array<{ source: string; series: string; points: Array<{ t: number; value: number }> }>;
+  panels: Array<{ title: string; panel: 'top' | 'timeseries'; by?: string; series?: string; plugin: string; pluginName: string; icon?: string; rows?: Array<{ name: string; n: number }> }>;
+}
+
+export interface ItemQuery {
+  q?: string;
+  range?: string;
+  source?: string;
+  feed?: string;
+  sentiment?: 'neg' | 'pos' | 'neutral';
+  sort?: 'recent' | 'engagement';
+  limit?: number;
+  offset?: number;
 }
 
 export interface ClaudeStatus {
@@ -202,5 +301,22 @@ export const api = {
   claude: (refresh = false) => req<ClaudeStatus>('GET', `/api/system/claude${refresh ? '?refresh=1' : ''}`),
   usage: () => req<{ usage: UsageInfo | null; queue: { active: number; waiting: number; limit: number } }>('GET', '/api/system/usage'),
   settings: () => req<Settings>('GET', '/api/system/settings'),
+  plugins: () => req<PluginList>('GET', '/api/plugins'),
+  setPluginEnabled: (id: string, enabled: boolean) => req<{ enabled: boolean }>('PUT', `/api/plugins/${id}`, { enabled }),
+  savePluginCredentials: (id: string, values: Record<string, string>) => req<{ credentialsSet: Record<string, boolean> }>('PUT', `/api/plugins/${id}/credentials`, { values }),
+  testPlugin: (id: string) => req<{ ok: boolean; text: string }>('POST', `/api/plugins/${id}/test`),
+  reloadPlugins: () => req<PluginList>('POST', '/api/plugins/reload'),
+  openPluginsFolder: () => req<{ opened: string }>('POST', '/api/plugins/open-folder'),
+  previewSource: (body: { plugin: string; source: string; config: Record<string, unknown>; workflowId?: string; nodeId?: string }) => req<SourcePreview>('POST', '/api/plugins/preview', body),
+  pluginTools: () => req<PluginTool[]>('GET', '/api/plugins/tools'),
+  datasets: () => req<DatasetInfo[]>('GET', '/api/datasets'),
+  datasetInsights: (id: string, range: string, source?: string) =>
+    req<DatasetInsights>('GET', `/api/datasets/${encodeURIComponent(id)}/insights?range=${range}${source ? `&source=${encodeURIComponent(source)}` : ''}`),
+  datasetItems: (id: string, q: ItemQuery) =>
+    req<{ total: number; items: DatasetItem[] }>(
+      'GET',
+      `/api/datasets/${encodeURIComponent(id)}/items?${new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => [k, String(v)])).toString()}`,
+    ),
+  deleteDataset: (id: string) => req<{ deleted: boolean }>('DELETE', `/api/datasets/${encodeURIComponent(id)}`),
   saveSettings: (s: Partial<Settings>) => req<Settings>('PUT', '/api/system/settings', s),
 };

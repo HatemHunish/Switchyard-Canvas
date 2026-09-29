@@ -1,10 +1,11 @@
 import { AgentData, WfEdge, WfNode } from '../common/types';
+import { INSIGHT_TEMPLATES } from './insight-templates';
 
 export interface WorkflowTemplate {
   key: string;
   name: string;
   description: string;
-  pattern: 'monitor' | 'triggered' | 'pipeline' | 'human' | 'memory' | 'orchestrator' | 'output';
+  pattern: 'monitor' | 'triggered' | 'pipeline' | 'human' | 'memory' | 'orchestrator' | 'output' | 'insights';
   nodes: WfNode[];
   edges: WfEdge[];
 }
@@ -344,4 +345,5 @@ export const TEMPLATES: WorkflowTemplate[] = [
     ],
     edges: [edge('drop', 'summarize'), edge('summarize', 'needsAction'), edge('needsAction', 'tasks', 'true')],
   },
+  ...INSIGHT_TEMPLATES,
 ];

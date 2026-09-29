@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError, type WorkflowView } from '../api';
 import { autoLayout } from '../lib/layout';
 import { subscribe } from '../lib/live';
-import { isAgentLike, isTrigger, metaByKey, metaOf } from '../lib/nodeMeta';
+import { isAgentLike, isStore, isTrigger, metaByKey, metaOf } from '../lib/nodeMeta';
 import type { HumanRequest, NodeKind, NodeRun, Run, WfEdge, WfNode } from '../types';
 import { ExportDialog } from './ExportDialog';
 import { Inspector } from './Inspector';
@@ -62,9 +62,11 @@ interface Props {
   inbox: HumanRequest[];
   /** Set by "Open in canvas" in the Inbox. */
   focus?: { runId: string; nodeId?: string; nonce: number };
+  onOpenPlugins: () => void;
+  onOpenInsights: (dataset: string) => void;
 }
 
-export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, focus }: Props) {
+export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, focus, onOpenPlugins, onOpenInsights }: Props) {
   const rf = useReactFlow();
   const [nodes, setNodes] = useState<FlowNodeType[]>(() => workflow.nodes.map(toFlowNode));
   const [edges, setEdges] = useState<Edge[]>(() => workflow.edges.map(toFlowEdge));
@@ -170,9 +172,9 @@ export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, fo
       if (c.source === c.target) return false;
       const source = nodes.find((n) => n.id === c.source);
       const target = nodes.find((n) => n.id === c.target);
-      if (!source || !target || isTrigger(target.data.kind) || target.data.kind === 'memory') return false;
-      // Memory plugs into agents only, through their top "memory" socket.
-      if (source.data.kind === 'memory') return isAgentLike(target.data.kind);
+      if (!source || !target || isTrigger(target.data.kind) || isStore(target.data.kind)) return false;
+      // Memory and datasets plug into agents only, through their top "memory" socket.
+      if (isStore(source.data.kind)) return isAgentLike(target.data.kind);
       // A review's ↩ revise handle loops back to an agent (its bottom socket).
       if (c.sourceHandle === 'revise') return isAgentLike(target.data.kind);
       // An orchestrator's team handle adds plain agents as its workers.
@@ -197,8 +199,9 @@ export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, fo
       const config = meta.defaults();
       if (kind === 'agent') config.name = `agent-${nodes.filter((n) => n.data.kind === 'agent').length + 1}`;
       if (kind === 'orchestrator') config.name = `orchestrator-${nodes.filter((n) => n.data.kind === 'orchestrator').length + 1}`;
-      const id = `${key.replace('trigger.', '').replace('action.', '')}-${shortId()}`;
-      setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), { id, type: 'flow', position: pos, selected: true, data: { kind, config } }]);
+      const id = `${key.replace('trigger.', '').replace('action.', '').replace(/^source:[\w-]+\./, 'src-')}-${shortId()}`;
+      const label = kind === 'source' ? meta.title : undefined;
+      setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), { id, type: 'flow', position: pos, selected: true, data: { kind, config, label } }]);
       setSelectedId(id);
       markDirty();
     },
@@ -330,14 +333,14 @@ export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, fo
     [nodes, edges, viewed, issuesByNode, dirty],
   );
 
-  const memoryIds = useMemo(() => new Set(nodes.filter((n) => n.data.kind === 'memory').map((n) => n.id)), [nodes]);
+  const memoryIds = useMemo(() => new Set(nodes.filter((n) => isStore(n.data.kind)).map((n) => n.id)), [nodes]);
   const displayEdges = useMemo(
     () =>
       edges.map((e) => {
         const t = viewed?.nodes[e.target]?.status;
         const s = viewed?.nodes[e.source];
         const activeBranch = s?.output?.pass === undefined || String(s.output.pass) === (e.sourceHandle ?? 'true');
-        if (memoryIds.has(e.source)) return { ...e, className: 'e-memory', targetHandle: 'memory', animated: false };
+        if (memoryIds.has(e.source)) return { ...e, className: nodes.find((n) => n.id === e.source)?.data.kind === 'dataset' ? 'e-memory e-dataset' : 'e-memory', targetHandle: 'memory', animated: false };
         if (e.sourceHandle === 'team') {
           // Lit while the orchestrator has delegated to this worker.
           return { ...e, animated: viewed?.nodes[e.target]?.status === 'running' };
@@ -349,7 +352,7 @@ export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, fo
         }
         return { ...e, animated: (t === 'running' || t === 'queued') && activeBranch };
       }),
-    [edges, viewed, memoryIds],
+    [edges, viewed, memoryIds, nodes],
   );
 
   const selected = nodes.find((n) => n.id === selectedId) ?? null;
@@ -476,7 +479,7 @@ export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, fo
       )}
 
       <div className="workspace">
-        <Palette onAdd={(k) => addNode(k)} />
+        <Palette onAdd={(k) => addNode(k)} onOpenPlugins={onOpenPlugins} />
         <div className="canvas" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
           <ReactFlow
             nodes={displayNodes}
@@ -512,6 +515,9 @@ export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, fo
             key={selected.id}
             node={selected}
             workflowId={workflow.id}
+            workflowName={view.name}
+            onOpenPlugins={onOpenPlugins}
+            onOpenInsights={onOpenInsights}
             webhookToken={view.webhookToken}
             saved={!dirty}
             nodeRun={viewed?.nodes[selected.id]}

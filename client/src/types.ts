@@ -6,7 +6,7 @@ export type TriggerKind =
   | 'trigger.file'
   | 'trigger.webhook';
 
-export type NodeKind = TriggerKind | 'agent' | 'orchestrator' | 'condition' | 'merge' | 'human' | 'memory' | 'output' | 'action';
+export type NodeKind = TriggerKind | 'agent' | 'orchestrator' | 'condition' | 'merge' | 'human' | 'memory' | 'output' | 'action' | 'source' | 'dataset' | 'insight';
 
 export type PermissionMode =
   | 'dontAsk'
@@ -38,6 +38,8 @@ export interface AgentData {
   maxQuestions?: number;
   /** Tell someone when this agent asks a question. */
   askNotify?: NotifyConfig;
+  /** Plugin tools this agent may call (names from the plugins' manifests). */
+  pluginTools?: string[];
 }
 
 /**
@@ -174,6 +176,85 @@ export interface MemoryStats {
   lastIndexedAt?: number;
 }
 
+/** Collects items from a plugin source (Reddit, RSS, Google Trends…) into a dataset. */
+export interface SourceData {
+  plugin: string;
+  source: string;
+  /** Values for the source's fields; strings support {{templates}}. */
+  config: Record<string, unknown>;
+  /** Dataset name; empty = the workflow's name. */
+  dataset?: string;
+  /** Pass only items not seen before (default) instead of everything fetched. */
+  onlyNew: boolean;
+  /** Skip the following steps when nothing new came in. */
+  stopIfEmpty: boolean;
+  /** Max items kept per run. */
+  limit?: number;
+  /** If fetching fails, mark this step failed but let the rest of the workflow continue without it. */
+  continueOnError?: boolean;
+}
+
+/** A dataset agents can query (connects to an agent's memory socket, like Memory). */
+export interface DatasetData {
+  name: string;
+}
+
+export type InsightField = 'sentiment' | 'topics' | 'language' | 'relevance' | 'entities' | 'summary';
+
+/** Labels new dataset items with an LLM: sentiment, topics, relevance… */
+export interface InsightData {
+  /** Dataset name; empty = the dataset of the source(s) before it, else the workflow's name. */
+  dataset?: string;
+  fields: InsightField[];
+  /** What you care about; used for relevance and topics. */
+  brief?: string;
+  /** Extra fields, one per line: "key: what to extract". */
+  custom?: string;
+  model?: string;
+  /** Max items labelled per run. */
+  maxItems?: number;
+  stopIfEmpty: boolean;
+}
+
+export type ItemKind = 'post' | 'comment' | 'video' | 'article' | 'trend' | 'review' | 'page' | 'other';
+
+/** One normalized media record, whatever the platform. */
+export interface Item {
+  /** Stable id within the plugin (post id, URL…); used to de-duplicate. */
+  id: string;
+  kind: ItemKind;
+  title?: string;
+  text?: string;
+  url?: string;
+  author?: string;
+  /** Epoch ms. */
+  publishedAt?: number;
+  metrics?: { likes?: number; comments?: number; shares?: number; views?: number; score?: number; [k: string]: number | undefined };
+  tags?: string[];
+  media?: Array<{ type: 'image' | 'video'; url: string }>;
+  extra?: Record<string, unknown>;
+}
+
+/** A time-series value (search interest, followers, subscribers…). */
+export interface Point {
+  series: string;
+  /** Epoch ms. */
+  t: number;
+  value: number;
+}
+
+/** A stored item as the Insights tab sees it. */
+export interface DatasetItem extends Item {
+  source: string;
+  feed: string;
+  label?: string;
+  firstSeen: number;
+  lastSeen: number;
+  sentiment?: number;
+  topics?: string[];
+  enrich?: Record<string, unknown>;
+}
+
 export interface ConditionData {
   mode: 'expression' | 'llm';
   /** JS expression evaluated against `output`, `input`, `trigger`. */
@@ -292,7 +373,8 @@ export type BusEvent =
   | { type: 'node'; workflowId: string; node: Omit<NodeRun, 'events'> }
   | { type: 'node.event'; workflowId: string; runId: string; nodeId: string; event: NodeEvent }
   | { type: 'usage'; usage: UsageInfo }
-  | { type: 'inbox'; request: HumanRequest };
+  | { type: 'inbox'; request: HumanRequest }
+  | { type: 'dataset'; dataset: string; added: number };
 
 export interface HumanResponse {
   decision?: 'approve' | 'reject';
@@ -317,6 +399,8 @@ export interface HumanRequest {
   /** Reviews only: the agent a rejection is sent back to (absent when reject takes the "no" path). */
   reviseTo?: string;
   maxRounds?: number;
+  /** Files made before this review (e.g. the PDF about to be emailed), to open while reviewing. */
+  files?: OutputFile[];
   status: 'pending' | 'answered' | 'cancelled' | 'expired';
   createdAt: number;
   expiresAt?: number;

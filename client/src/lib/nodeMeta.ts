@@ -1,4 +1,6 @@
+import type { PluginInfo } from '../api';
 import type { NodeKind } from '../types';
+import { pluginById, sourceDef, sourceDefaults } from './plugins';
 
 export interface KindMeta {
   /** Palette entry id; several entries can share a kind (e.g. the action types). */
@@ -6,7 +8,7 @@ export interface KindMeta {
   kind: NodeKind;
   title: string;
   icon: string;
-  group: 'Triggers' | 'Steps' | 'People' | 'Context' | 'Logic' | 'Output' | 'Actions';
+  group: 'Triggers' | 'Sources' | 'Steps' | 'People' | 'Context' | 'Logic' | 'Output' | 'Actions';
   hint: string;
   color: string;
   defaults: () => Record<string, any>;
@@ -103,6 +105,16 @@ export const KINDS: KindMeta[] = [
     }),
   },
   {
+    key: 'insight',
+    kind: 'insight',
+    title: 'Insight',
+    icon: '💡',
+    group: 'Steps',
+    hint: 'Label new items: sentiment, topics, relevance…',
+    color: 'var(--c-insight)',
+    defaults: () => ({ dataset: '', fields: ['sentiment', 'topics', 'summary'], brief: '', custom: '', model: 'haiku', maxItems: 100, stopIfEmpty: false }),
+  },
+  {
     key: 'human',
     kind: 'human',
     title: 'Human review',
@@ -130,6 +142,16 @@ export const KINDS: KindMeta[] = [
       autoRetrieve: 0,
       reindexBeforeRun: true,
     }),
+  },
+  {
+    key: 'dataset',
+    kind: 'dataset',
+    title: 'Dataset',
+    icon: '🗂️',
+    group: 'Context',
+    hint: 'Collected media agents can search and analyse',
+    color: 'var(--c-dataset)',
+    defaults: () => ({ name: 'Dataset' }),
   },
   {
     key: 'condition',
@@ -226,11 +248,51 @@ export const FORMATS: Array<{ value: string; label: string }> = [
 ];
 const formatLabel = (f: string) => FORMATS.find((x) => x.value === f)?.label.replace(/ \(.*\)$/, '') ?? f;
 
-export const metaByKey = (key: string) => KINDS.find((k) => k.key === key);
+/** Fallback for a source whose plugin isn't installed (or not loaded yet). */
+const SOURCE_META: KindMeta = {
+  key: 'source',
+  kind: 'source',
+  title: 'Source',
+  icon: '📥',
+  group: 'Sources',
+  hint: 'Collect items from a plugin',
+  color: 'var(--c-source)',
+  defaults: () => ({ plugin: '', source: '', config: {}, dataset: '', onlyNew: true, stopIfEmpty: false, continueOnError: true, limit: 100 }),
+};
 
-/** Palette metadata for a node; action nodes are looked up by their action type. */
-export const metaOf = (kind: string, data?: Record<string, any>) =>
-  (kind === 'action' && data?.action ? metaByKey(`action.${data.action}`) : undefined) ?? KINDS.find((k) => k.kind === kind) ?? KINDS.find((k) => k.kind === 'agent')!;
+/** Palette entries for every source of an enabled plugin (key "source:<plugin>.<source>"). */
+export function sourceKinds(plugins: PluginInfo[]): KindMeta[] {
+  return plugins
+    .filter((p) => p.enabled)
+    .flatMap((p) =>
+      (p.sources ?? []).map((def) => ({
+        ...SOURCE_META,
+        key: `source:${p.id}.${def.id}`,
+        title: def.title,
+        icon: p.icon || SOURCE_META.icon,
+        hint: def.hint || p.description || '',
+        defaults: () => ({ ...SOURCE_META.defaults(), plugin: p.id, source: def.id, config: sourceDefaults(def) }),
+      })),
+    );
+}
+
+export const metaByKey = (key: string): KindMeta | undefined => {
+  if (key.startsWith('source:')) {
+    const [plugin, source] = key.slice(7).split('.');
+    const { plugin: p, def } = sourceDef(plugin, source);
+    return p && def ? sourceKinds([{ ...p, enabled: true, sources: [def] }])[0] : undefined;
+  }
+  return KINDS.find((k) => k.key === key);
+};
+
+/** Palette metadata for a node; action nodes are looked up by their action type, sources by plugin. */
+export const metaOf = (kind: string, data?: Record<string, any>): KindMeta => {
+  if (kind === 'source') return (data?.plugin && metaByKey(`source:${data.plugin}.${data.source}`)) || { ...SOURCE_META, icon: pluginById(data?.plugin)?.icon ?? SOURCE_META.icon };
+  return (kind === 'action' && data?.action ? metaByKey(`action.${data.action}`) : undefined) ?? KINDS.find((k) => k.kind === kind) ?? KINDS.find((k) => k.kind === 'agent')!;
+};
+
+/** Stores wired into an agent's top socket (not flow steps). */
+export const isStore = (kind: string) => kind === 'memory' || kind === 'dataset';
 
 /** Agent-like nodes: run Claude with a prompt, tools, memory and a session. */
 export const isAgentLike = (kind: string) => kind === 'agent' || kind === 'orchestrator';
@@ -285,6 +347,18 @@ export function subtitle(kind: string, data: Record<string, any>): string {
       }
     case 'human':
       return data.onReject === 'revise' ? `reject → revise (max ${data.maxRounds || 3})` : 'approve / reject';
+    case 'source': {
+      const { plugin, def } = sourceDef(data.plugin, data.source);
+      if (!plugin) return `plugin "${data.plugin}" not installed`;
+      const first = def?.fields.find((f) => f.required) ?? def?.fields[0];
+      const v = first ? data.config?.[first.key] : undefined;
+      const shown = Array.isArray(v) ? v.join(', ') : v != null && v !== '' ? String(v) : '';
+      return [shown || (first?.required ? `set ${first.label.toLowerCase()}` : plugin.name), `→ ${data.dataset?.trim() || 'workflow dataset'}`].join(' ');
+    }
+    case 'dataset':
+      return 'agents can search it';
+    case 'insight':
+      return `${(data.fields ?? []).join(', ') || 'no fields'} · ${data.model || 'haiku'}`;
     default:
       return '';
   }
