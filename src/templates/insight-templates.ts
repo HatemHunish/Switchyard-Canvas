@@ -1,4 +1,4 @@
-import { AgentData, InsightData, SourceData, WfEdge, WfNode } from '../common/types';
+import { AgentData, InsightData, SetupQuestion, SourceData, WfEdge, WfNode } from '../common/types';
 
 // Media monitoring and insight workflows built on the plugin sources.
 
@@ -29,12 +29,15 @@ const insight = (over: Partial<InsightData> = {}): InsightData => ({ fields: ['s
 const at = (col: number, row = 0) => ({ x: col * 300, y: row * 170 });
 const edge = (source: string, target: string, sourceHandle?: string): WfEdge => ({ id: `${source}-${sourceHandle ?? 'out'}-${target}`, source, target, sourceHandle: sourceHandle ?? null });
 
-export const INSIGHT_TEMPLATES: Array<{ key: string; name: string; description: string; pattern: 'insights'; nodes: WfNode[]; edges: WfEdge[] }> = [
+export const INSIGHT_TEMPLATES: Array<{ key: string; name: string; description: string; pattern: 'insights'; setup?: SetupQuestion[]; nodes: WfNode[]; edges: WfEdge[] }> = [
   {
     key: 'brand-monitor',
     name: 'Brand mention monitor',
     description: 'Every hour: new mentions from Reddit, Hacker News and Google News go into a “Brand” dataset, get sentiment and topics, and you are alerted when negative mentions spike. Change “Acme” to your brand.',
     pattern: 'insights',
+    setup: [
+      { id: 'brand', label: 'Your brand, product or company name', type: 'text', placeholder: 'Acme', required: true, targets: [{ node: 'reddit', path: 'config.query', replace: 'Acme' }, { node: 'hn', path: 'config.query', replace: 'Acme' }, { node: 'news', path: 'config.query', replace: 'Acme' }, { node: 'label', path: 'brief', replace: 'Acme' }] },
+    ],
     nodes: [
       { id: 'hourly', kind: 'trigger.schedule', position: at(0, 1), data: { mode: 'interval', everyMinutes: 60 } },
       { id: 'reddit', kind: 'source', label: 'Reddit mentions', position: at(1, 0), data: src('reddit', 'search', 'Brand', { query: '"Acme"', sort: 'new', time: 'day' }) },
@@ -42,7 +45,7 @@ export const INSIGHT_TEMPLATES: Array<{ key: string; name: string; description: 
       { id: 'news', kind: 'source', label: 'News mentions', position: at(1, 2), data: src('rss', 'google-news', 'Brand', { query: '"Acme" when:1d', language: 'en-US', country: 'US' }) },
       { id: 'all', kind: 'merge', position: at(2, 1), data: { mode: 'all' } },
       { id: 'label', kind: 'insight', position: at(3, 1), data: insight({ dataset: 'Brand', brief: 'Mentions of Acme, its products and support. Sentiment is toward Acme.', fields: ['sentiment', 'topics', 'relevance', 'summary'] }) },
-      { id: 'spike', kind: 'condition', position: at(4, 1), data: { mode: 'expression', expression: 'output.count >= 3 && output.negativeShare >= 0.3' } },
+      { id: 'spike', kind: 'condition', label: 'Negative mentions spike (30% or more of at least 3 new ones)', position: at(4, 1), data: { mode: 'expression', expression: 'output.count >= 3 && output.negativeShare >= 0.3' } },
       { id: 'alert', kind: 'action', position: at(5, 1), data: { action: 'notify', title: 'Negative mentions: {{nodes.label.output.negative}} of {{nodes.label.output.count}}', message: 'Open Insights → Brand to see what people are saying.' } },
     ],
     edges: [edge('hourly', 'reddit'), edge('hourly', 'hn'), edge('hourly', 'news'), edge('reddit', 'all'), edge('hn', 'all'), edge('news', 'all'), edge('all', 'label'), edge('label', 'spike'), edge('spike', 'alert', 'true')],
@@ -52,6 +55,12 @@ export const INSIGHT_TEMPLATES: Array<{ key: string; name: string; description: 
     name: 'Trend radar → content ideas',
     description: 'Every morning: today’s Google trending searches plus search interest for your keywords go into a “Trends” dataset; an agent suggests content ideas, you approve or send feedback, and the plan is saved.',
     pattern: 'insights',
+    setup: [
+      { id: 'business', label: 'What does your business do?', type: 'text', placeholder: 'a coffee brand', targets: [{ node: 'ideas', path: 'prompt', replace: 'a coffee brand' }] },
+      { id: 'keywords', label: 'Keywords to track (up to 5)', type: 'list', placeholder: 'cold brew\ncoffee subscription', targets: [{ node: 'interest', path: 'config.keywords' }] },
+      { id: 'country', label: 'Country code', type: 'text', default: 'US', placeholder: 'US, SA, AE, GB…', targets: [{ node: 'daily', path: 'config.geo' }, { node: 'interest', path: 'config.geo' }] },
+      { id: 'time', label: 'What time each morning?', type: 'time', default: '08:00', targets: [{ node: 'morning', path: '@time' }] },
+    ],
     nodes: [
       { id: 'morning', kind: 'trigger.schedule', position: at(0, 0.5), data: { mode: 'cron', cron: '0 8 * * *', everyMinutes: 60 } },
       { id: 'daily', kind: 'source', label: 'Trending searches', position: at(1, 0), data: src('gtrends', 'daily', 'Trends', { geo: 'US' }, { onlyNew: false }) },
@@ -79,6 +88,12 @@ export const INSIGHT_TEMPLATES: Array<{ key: string; name: string; description: 
     name: 'Weekly social media report',
     description: 'Every Monday: your YouTube channel, Instagram and Facebook Page stats and posts go into a “Social” dataset; an analyst writes the week’s report (growth, best posts, what to do next) as a PDF and drafts an email. Needs keys under Plugins.',
     pattern: 'insights',
+    setup: [
+      { id: 'yt', label: 'Your YouTube channel', type: 'text', placeholder: '@yourchannel', help: 'Leave empty if you don’t use YouTube.', targets: [{ node: 'yt', path: 'config.channel' }] },
+      { id: 'ig', label: 'Your Instagram account ID', type: 'text', help: 'Needs the Instagram & Facebook plugin key. Leave empty to skip.', targets: [{ node: 'ig', path: 'config.igUserId' }] },
+      { id: 'fb', label: 'Your Facebook Page ID', type: 'text', help: 'Leave empty to skip.', targets: [{ node: 'fb', path: 'config.pageId' }] },
+      { id: 'email', label: 'Who should get the report?', type: 'email', targets: [{ node: 'mail', path: 'to' }] },
+    ],
     nodes: [
       { id: 'monday', kind: 'trigger.schedule', position: at(0, 1), data: { mode: 'cron', cron: '0 9 * * 1', everyMinutes: 60 } },
       { id: 'yt', kind: 'source', label: 'YouTube channel', position: at(1, 0), data: src('youtube', 'channel', 'Social', { channel: '@yourchannel' }, { onlyNew: false }) },
@@ -107,12 +122,17 @@ export const INSIGHT_TEMPLATES: Array<{ key: string; name: string; description: 
     name: 'Competitor watch',
     description: 'Every 6 hours: watches competitors’ pricing pages for changes and the news for their names; when something changed, an analyst explains what and why it matters and drafts an email.',
     pattern: 'insights',
+    setup: [
+      { id: 'competitor', label: 'Competitor name', type: 'text', placeholder: 'Competitor Inc', required: true, targets: [{ node: 'news', path: 'config.query', replace: 'Competitor Inc' }] },
+      { id: 'pages', label: 'Their pages to watch (one per line)', type: 'list', placeholder: 'https://competitor.com/pricing', required: true, targets: [{ node: 'pages', path: 'config.urls' }] },
+      { id: 'email', label: 'Who should get the updates?', type: 'email', targets: [{ node: 'mail', path: 'to' }] },
+    ],
     nodes: [
       { id: 'sixh', kind: 'trigger.schedule', position: at(0, 0.5), data: { mode: 'interval', everyMinutes: 360 } },
       { id: 'pages', kind: 'source', label: 'Competitor pages', position: at(1, 0), data: src('webwatch', 'page', 'Competitors', { urls: ['https://example.com/pricing'], start: '', end: '', ignore: [] }) },
       { id: 'news', kind: 'source', label: 'Competitor news', position: at(1, 1), data: src('rss', 'google-news', 'Competitors', { query: '"Competitor Inc" when:1d', language: 'en-US', country: 'US' }) },
       { id: 'both', kind: 'merge', position: at(2, 0.5), data: { mode: 'all' } },
-      { id: 'changed', kind: 'condition', position: at(3, 0.5), data: { mode: 'expression', expression: '[].concat(output).some((o) => o && o.newCount > 0)' } },
+      { id: 'changed', kind: 'condition', label: 'Something changed or there’s news', position: at(3, 0.5), data: { mode: 'expression', rule: { field: 'newAll', op: '>', value: '0' }, expression: '([].concat(output).reduce((a, o) => a + ((o && o.newCount) || 0), 0) ?? 0) > 0' } },
       {
         id: 'analyst',
         kind: 'agent',
@@ -133,6 +153,10 @@ export const INSIGHT_TEMPLATES: Array<{ key: string; name: string; description: 
     name: 'App review digest',
     description: 'Every day: new App Store reviews are labelled (sentiment, topics, bug or feature request); an agent writes a digest of themes, bugs and praise, and saves it. Set your app ID.',
     pattern: 'insights',
+    setup: [
+      { id: 'app', label: 'Your app’s App Store link or ID', type: 'text', placeholder: 'https://apps.apple.com/us/app/…/id284882215', required: true, targets: [{ node: 'reviews', path: 'config.appId' }] },
+      { id: 'country', label: 'Store country', type: 'text', default: 'us', targets: [{ node: 'reviews', path: 'config.country' }] },
+    ],
     nodes: [
       { id: 'daily', kind: 'trigger.schedule', position: at(0), data: { mode: 'cron', cron: '0 9 * * *', everyMinutes: 60 } },
       { id: 'reviews', kind: 'source', label: 'App Store reviews', position: at(1), data: src('rss', 'app-reviews', 'App reviews', { appId: '284882215', country: 'us' }, { continueOnError: false }) },

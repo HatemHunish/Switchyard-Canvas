@@ -17,12 +17,14 @@ import { api, ApiError, type WorkflowView } from '../api';
 import { autoLayout } from '../lib/layout';
 import { subscribe } from '../lib/live';
 import { isAgentLike, isStore, isTrigger, metaByKey, metaOf } from '../lib/nodeMeta';
+import { modeNow, tildify, useSimple } from '../lib/mode';
 import type { HumanRequest, NodeKind, NodeRun, Run, WfEdge, WfNode } from '../types';
 import { ExportDialog } from './ExportDialog';
 import { Inspector } from './Inspector';
 import { FlowNode, type FlowNodeType } from './nodes/FlowNode';
 import { DND_MIME, Palette } from './Palette';
 import { RunsPanel } from './RunsPanel';
+import { StepsView } from './StepsView';
 
 const nodeTypes = { flow: FlowNode };
 
@@ -46,6 +48,7 @@ function styleEdge(e: Edge): Edge {
 const toFlowEdge = (e: WfEdge): Edge => styleEdge({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle ?? null });
 
 const shortId = () => Math.random().toString(36).slice(2, 8);
+const isBranchKind = (k: string) => k === 'condition' || k === 'human';
 
 interface ViewedRun {
   run: Run;
@@ -67,6 +70,7 @@ interface Props {
 }
 
 export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, focus, onOpenPlugins, onOpenInsights }: Props) {
+  const simple = useSimple();
   const rf = useReactFlow();
   const [nodes, setNodes] = useState<FlowNodeType[]>(() => workflow.nodes.map(toFlowNode));
   const [edges, setEdges] = useState<Edge[]>(() => workflow.edges.map(toFlowEdge));
@@ -185,10 +189,23 @@ export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, fo
     [nodes],
   );
 
-  const addNode = useCallback(
-    (key: string, position?: { x: number; y: number }) => {
+  /** A new step of the given palette type, not yet on the canvas. */
+  const newNode = (key: string, pos: { x: number; y: number }): FlowNodeType => {
       const meta = metaByKey(key) ?? metaOf(key);
       const kind = meta.kind;
+      const config = meta.defaults();
+      if (kind === 'agent') config.name = `agent-${nodes.filter((n) => n.data.kind === 'agent').length + 1}`;
+      if (kind === 'orchestrator') config.name = `orchestrator-${nodes.filter((n) => n.data.kind === 'orchestrator').length + 1}`;
+      // Simple mode: new AI steps start in their own private folder, not your home folder.
+      if ((kind === 'agent' || kind === 'orchestrator') && modeNow().mode === 'simple') config.cwd = tildify(modeNow().workspaceDir);
+      if (kind === 'action' && config.action === 'email' && !config.to && modeNow().userEmail) config.to = modeNow().userEmail;
+      const id = `${key.replace('trigger.', '').replace('action.', '').replace(/^source:[\w-]+\./, 'src-')}-${shortId()}`;
+      const label = kind === 'source' ? meta.title : undefined;
+      return { id, type: 'flow', position: pos, selected: true, data: { kind, config, label } };
+  };
+
+  const addNode = useCallback(
+    (key: string, position?: { x: number; y: number }) => {
       const pos =
         position ??
         (() => {
@@ -196,17 +213,57 @@ export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, fo
           const r = el?.getBoundingClientRect();
           return rf.screenToFlowPosition({ x: (r?.left ?? 0) + (r?.width ?? 800) / 2 - 120, y: (r?.top ?? 0) + (r?.height ?? 600) / 2 - 40 });
         })();
-      const config = meta.defaults();
-      if (kind === 'agent') config.name = `agent-${nodes.filter((n) => n.data.kind === 'agent').length + 1}`;
-      if (kind === 'orchestrator') config.name = `orchestrator-${nodes.filter((n) => n.data.kind === 'orchestrator').length + 1}`;
-      const id = `${key.replace('trigger.', '').replace('action.', '').replace(/^source:[\w-]+\./, 'src-')}-${shortId()}`;
-      const label = kind === 'source' ? meta.title : undefined;
-      setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), { id, type: 'flow', position: pos, selected: true, data: { kind, config, label } }]);
-      setSelectedId(id);
+      const node = newNode(key, pos);
+      setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), node]);
+      setSelectedId(node.id);
       markDirty();
     },
     [nodes, rf],
   );
+
+  /**
+   * Steps view: put a new step right after another one (on a yes/no branch for
+   * conditions and reviews), taking over its outgoing connections, then re-tidy.
+   */
+  const insertAfter = (afterId: string | null, handle: string | null, key: string) => {
+    const after = nodes.find((n) => n.id === afterId);
+    const node = newNode(key, after ? { x: after.position.x + 150, y: after.position.y + 60 } : { x: 0, y: 0 });
+    const kind = node.data.kind;
+    let nextEdges = edges;
+    if (after && !isStore(kind) && !isTrigger(kind)) {
+      const out = edges.filter((e) => e.source === after.id && e.sourceHandle !== 'team' && e.sourceHandle !== 'revise' && (handle ? e.sourceHandle === handle : true));
+      nextEdges = [
+        ...edges.filter((e) => !out.includes(e)),
+        styleEdge({ id: `e-${shortId()}`, source: after.id, target: node.id, sourceHandle: handle ?? null } as Edge),
+        ...out.map((e) => styleEdge({ id: `e-${shortId()}`, source: node.id, target: e.target, sourceHandle: isBranchKind(kind) ? 'true' : null } as Edge)),
+      ];
+    } else if (after && isStore(kind)) {
+      // A store attaches to the step it was added from (if that's an AI step).
+      if (isAgentLike(after.data.kind)) nextEdges = [...edges, styleEdge({ id: `e-${shortId()}`, source: node.id, target: after.id, sourceHandle: null } as Edge)];
+    }
+    const nextNodes = autoLayout([...nodes.map((n) => ({ ...n, selected: false })), node], nextEdges);
+    setNodes(nextNodes);
+    setEdges(nextEdges);
+    setSelectedId(node.id);
+    markDirty();
+  };
+
+  const [editorView, setEditorView] = useState<'canvas' | 'steps'>(() => {
+    try {
+      return (localStorage.getItem('ac.editorView') as 'canvas' | 'steps') || (modeNow().mode === 'simple' ? 'steps' : 'canvas');
+    } catch {
+      return 'canvas';
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('ac.editorView', editorView);
+    } catch {
+      /* storage unavailable */
+    }
+    if (editorView === 'canvas') setTimeout(() => rf.fitView({ padding: 0.25, maxZoom: 1 }), 50);
+  }, [editorView]);
+  const [chooser, setChooser] = useState<{ after: string | null; handle: string | null } | null>(null);
 
   const onDrop = (e: React.DragEvent) => {
     const key = e.dataTransfer.getData(DND_MIME);
@@ -255,6 +312,18 @@ export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, fo
 
   const toggleEnabled = async () => {
     const next = !view.enabled;
+    // Before it starts sending things on its own, say plainly what will go out.
+    if (next) {
+      const sends = nodes.flatMap((n) => {
+        const c = n.data.config;
+        if (n.data.kind !== 'action') return [];
+        if (c.action === 'email' && (c.via === 'smtp' || c.sendNow)) return [`email ${c.to || '(no recipient yet)'}`];
+        if (c.action === 'email') return [`prepare email drafts to ${c.to || '(no recipient yet)'}`];
+        if (c.action === 'http' && c.url) return [`post messages to ${String(c.url).replace(/^https?:\/\//, '').split('/')[0]}`];
+        return [];
+      });
+      if (sends.length && !confirm(`Once it's on, this workflow will run by itself and ${[...new Set(sends)].join(', ')}.\n\nTurn it on?`)) return;
+    }
     const saved = await save({ enabled: next });
     if (saved) notify(next ? 'Enabled: triggers are armed' : 'Disabled: triggers stopped', 'ok');
   };
@@ -381,7 +450,7 @@ export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, fo
         {view.issues.length > 0 && (
           <div className="issues-wrap">
             <button className="btn warnbtn" onClick={() => setShowIssues(!showIssues)}>
-              {view.issues.length} issue{view.issues.length > 1 ? 's' : ''}
+              {simple ? `${view.issues.length} thing${view.issues.length > 1 ? 's' : ''} to fix` : `${view.issues.length} issue${view.issues.length > 1 ? 's' : ''}`}
             </button>
             {showIssues && (
               <div className="popover" onMouseLeave={() => setShowIssues(false)}>
@@ -405,13 +474,22 @@ export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, fo
             )}
           </div>
         )}
+        <div className="seg view-switch" role="radiogroup" aria-label="View">
+          <button role="radio" aria-checked={editorView === 'steps'} className={editorView === 'steps' ? 'on' : ''} onClick={() => setEditorView('steps')} title="The steps as a list, in plain words">
+            Steps
+          </button>
+          <button role="radio" aria-checked={editorView === 'canvas'} className={editorView === 'canvas' ? 'on' : ''} onClick={() => setEditorView('canvas')} title="The steps as boxes and connections">
+            Canvas
+          </button>
+        </div>
         <span className="spacer" />
-        <label className={`switch ${view.enabled ? 'on' : ''}`} title="When enabled, schedule, file and webhook triggers fire automatically">
+        <UsageHint runs={runs} />
+        <label className={`switch ${view.enabled ? 'on' : ''}`} title={simple ? 'When on, it runs by itself (on its schedule, or when a file arrives)' : 'When enabled, schedule, file and webhook triggers fire automatically'}>
           <input type="checkbox" checked={view.enabled} onChange={toggleEnabled} />
           <span className="track">
             <span className="thumb" />
           </span>
-          {view.enabled ? 'Enabled' : 'Disabled'}
+          {simple ? (view.enabled ? 'On' : 'Off') : view.enabled ? 'Enabled' : 'Disabled'}
         </label>
         <div className="run-wrap">
           <button className="btn primary" onClick={() => (triggers.length > 1 ? setRunMenu(!runMenu) : run(triggers[0]?.id))} disabled={!triggers.length}>
@@ -437,15 +515,21 @@ export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, fo
           Runs{runs.length ? ` (${runs.length})` : ''}
         </button>
         <div className="more">
-          <button className="btn ghost" onClick={layout} title="Arrange nodes left to right">
-            Tidy
-          </button>
-          <button className="btn ghost" onClick={() => setShowExport(true)} title="Write agent nodes as .claude/agents/*.md">
-            Export
-          </button>
-          <button className="btn ghost" onClick={download} title="Download workflow JSON">
-            JSON
-          </button>
+          {editorView === 'canvas' && (
+            <button className="btn ghost" onClick={layout} title="Arrange nodes left to right">
+              Tidy
+            </button>
+          )}
+          {!simple && (
+            <>
+              <button className="btn ghost" onClick={() => setShowExport(true)} title="Write agent nodes as .claude/agents/*.md">
+                Export
+              </button>
+              <button className="btn ghost" onClick={download} title="Download workflow JSON">
+                JSON
+              </button>
+            </>
+          )}
           <button
             className="btn ghost danger"
             onClick={() => {
@@ -479,8 +563,18 @@ export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, fo
       )}
 
       <div className="workspace">
-        <Palette onAdd={(k) => addNode(k)} onOpenPlugins={onOpenPlugins} />
-        <div className="canvas" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+        {editorView === 'canvas' && <Palette onAdd={(k) => addNode(k)} onOpenPlugins={onOpenPlugins} />}
+        {editorView === 'steps' && (
+          <StepsView
+            nodes={nodes}
+            edges={edges}
+            selectedId={selectedId}
+            runs={viewed?.nodes}
+            onSelect={selectNode}
+            onInsert={(after, handle) => setChooser({ after, handle })}
+          />
+        )}
+        <div className="canvas" onDragOver={(e) => e.preventDefault()} onDrop={onDrop} hidden={editorView === 'steps'} style={editorView === 'steps' ? { display: 'none' } : undefined}>
           <ReactFlow
             nodes={displayNodes}
             edges={displayEdges}
@@ -516,6 +610,11 @@ export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, fo
             node={selected}
             workflowId={workflow.id}
             workflowName={view.name}
+            upstream={edges
+              .filter((e) => e.target === selected.id && e.sourceHandle !== 'team' && e.sourceHandle !== 'revise')
+              .map((e) => nodes.find((n) => n.id === e.source))
+              .filter((n): n is FlowNodeType => !!n && !isStore(n.data.kind))
+              .map((n) => ({ kind: n.data.kind, config: n.data.config }))}
             onOpenPlugins={onOpenPlugins}
             onOpenInsights={onOpenInsights}
             webhookToken={view.webhookToken}
@@ -542,8 +641,12 @@ export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, fo
             onChange={(patch) => updateSelected((n) => ({ ...n, data: { ...n.data, config: { ...n.data.config, ...patch } } }))}
             onLabel={(label) => updateSelected((n) => ({ ...n, data: { ...n.data, label } }))}
             onDelete={() => {
+              // In the Steps view, removing a step joins the step before it to the ones after it.
+              const into = editorView === 'steps' ? edges.filter((e) => e.target === selected.id && !isStore(nodes.find((n) => n.id === e.source)?.data.kind ?? '') && e.sourceHandle !== 'team') : [];
+              const from = editorView === 'steps' ? edges.filter((e) => e.source === selected.id && e.sourceHandle !== 'team' && e.sourceHandle !== 'revise') : [];
+              const heal = into.length === 1 && !isBranchKind(selected.data.kind) ? from.map((e) => styleEdge({ id: `e-${shortId()}`, source: into[0].source, target: e.target, sourceHandle: into[0].sourceHandle ?? null } as Edge)) : [];
               setNodes((ns) => ns.filter((n) => n.id !== selected.id));
-              setEdges((es) => es.filter((e) => e.source !== selected.id && e.target !== selected.id));
+              setEdges((es) => [...es.filter((e) => e.source !== selected.id && e.target !== selected.id), ...heal]);
               setSelectedId(null);
               markDirty();
             }}
@@ -567,7 +670,35 @@ export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, fo
         />
       )}
 
+      {chooser && (
+        <div className="modal-back" onClick={() => setChooser(null)}>
+          <div className="modal step-chooser" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Add a step">
+            <h3>Add a step{chooser.handle ? (chooser.handle === 'true' ? ' (if yes)' : ' (otherwise)') : ''}</h3>
+            <Palette
+              onAdd={(k) => {
+                insertAfter(chooser.after, chooser.handle, k);
+                setChooser(null);
+              }}
+              onOpenPlugins={onOpenPlugins}
+            />
+          </div>
+        </div>
+      )}
       {showExport && <ExportDialog workflowId={workflow.id} agentCount={nodes.filter((n) => n.data.kind === 'agent').length} dirty={dirty} onClose={() => setShowExport(false)} notify={notify} />}
     </div>
+  );
+}
+
+/** How heavy this workflow usually is on the Claude plan, from its recent runs (API-equivalent cost). */
+function UsageHint({ runs }: { runs: Run[] }) {
+  const done = runs.filter((r) => r.status === 'success').slice(0, 10);
+  if (!done.length) return null;
+  const avg = done.reduce((a, r) => a + (r.costUsd || 0), 0) / done.length;
+  const [label, cls] = avg < 0.05 ? ['Light on usage', 'light'] : avg < 0.5 ? ['Moderate usage', 'moderate'] : ['Heavy on usage', 'heavy'];
+  const mins = done.reduce((a, r) => a + ((r.finishedAt ?? r.startedAt) - r.startedAt), 0) / done.length / 60_000;
+  return (
+    <span className={`usage-hint ${cls}`} title={`Average of the last ${done.length} run(s): ≈$${avg.toFixed(2)} API-equivalent, ${mins < 1 ? 'under a minute' : `${Math.round(mins)} min`}. Your Claude plan covers this; heavier workflows use up its limits sooner.`}>
+      {label}
+    </span>
   );
 }

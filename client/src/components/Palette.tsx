@@ -1,15 +1,19 @@
 import { useState } from 'react';
-import { KINDS, sourceKinds, type KindMeta } from '../lib/nodeMeta';
+import { KINDS, SIMPLE_GROUPS, sourceKinds, type KindMeta } from '../lib/nodeMeta';
+import { useSimple } from '../lib/mode';
 import { usePlugins } from '../lib/plugins';
 
 export const DND_MIME = 'application/x-agent-canvas-kind';
 
 function Item({ k, onAdd }: { k: KindMeta; onAdd: (key: string) => void }) {
+  const simple = useSimple();
+  const title = simple && k.simple ? k.simple.title : k.title;
+  const hint = simple && k.simple ? k.simple.hint : k.hint;
   return (
     <button
       className="pal-item"
       draggable
-      title={`${k.hint}. Drag onto the canvas or click to add.`}
+      title={`${hint}. Drag onto the canvas or click to add.`}
       onDragStart={(e) => {
         e.dataTransfer.setData(DND_MIME, k.key);
         e.dataTransfer.effectAllowed = 'move';
@@ -19,8 +23,8 @@ function Item({ k, onAdd }: { k: KindMeta; onAdd: (key: string) => void }) {
     >
       <span className="pal-icon">{k.icon}</span>
       <span className="pal-text">
-        <span className="pal-name">{k.title}</span>
-        <span className="pal-hint">{k.hint}</span>
+        <span className="pal-name">{title}</span>
+        <span className="pal-hint">{hint}</span>
       </span>
     </button>
   );
@@ -34,7 +38,7 @@ function Sources({ onAdd, onOpenPlugins }: { onAdd: (key: string) => void; onOpe
   return (
     <div className="pal-group">
       <div className="pal-title">
-        Sources
+        {useSimple() ? SIMPLE_GROUPS.Sources : 'Sources'}
         {onOpenPlugins && (
           <button className="linkbtn pal-manage" onClick={onOpenPlugins} title="Turn plugins on/off, add keys">
             Plugins
@@ -70,6 +74,7 @@ function Sources({ onAdd, onOpenPlugins }: { onAdd: (key: string) => void; onOpe
 
 export function Palette({ onAdd, onOpenPlugins }: { onAdd: (key: string) => void; onOpenPlugins?: () => void }) {
   const groups = ['Triggers', 'Sources', 'Steps', 'People', 'Context', 'Logic', 'Output', 'Actions'] as const;
+  const simple = useSimple();
   return (
     <div className="palette">
       {groups.map((g) =>
@@ -77,8 +82,8 @@ export function Palette({ onAdd, onOpenPlugins }: { onAdd: (key: string) => void
           <Sources key={g} onAdd={onAdd} onOpenPlugins={onOpenPlugins} />
         ) : (
           <div key={g} className="pal-group">
-            <div className="pal-title">{g}</div>
-            {KINDS.filter((k) => k.group === g).map((k) => (
+            <div className="pal-title">{simple ? SIMPLE_GROUPS[g] : g}</div>
+            {KINDS.filter((k) => k.group === g && !(simple && k.advancedOnly)).map((k) => (
               <Item key={k.key} k={k} onAdd={onAdd} />
             ))}
           </div>

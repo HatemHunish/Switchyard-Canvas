@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { openViewer } from '../../lib/viewer';
+import { friendly } from '../../lib/plain';
 import type { AttentionItem, DashKpis, DashSummary, FileRow, HealthRow, LiveRun, RunFilters, RunRow, UpcomingItem } from '../../api';
 import { ago, clock, dur, money, pct, STATUS_ICON, until } from '../../lib/format';
 import { HBars, Meter, RunsPerDay, Sparkline } from './charts';
@@ -405,7 +406,7 @@ export function RecentRuns({
                 <td className="num">{r.costUsd ? money(r.costUsd) : '–'}</td>
                 <td className="num">{r.fileCount || '–'}</td>
                 <td className="note" title={r.error}>
-                  {r.status === 'failed' || r.status === 'cancelled' ? r.error : ''}
+                  {r.status === 'failed' || r.status === 'cancelled' ? (friendly(r.error)?.text ?? r.error) : ''}
                 </td>
                 <td className="num">
                   {r.status === 'running' ? (
@@ -581,7 +582,7 @@ export function Activity({ summary, loading, nav }: { summary: DashSummary; load
                 <li key={i}>
                   <button className="linkish" onClick={() => nav.openRun(e.workflowId, e.runId, e.nodeId)} title={e.message}>
                     <span className="err-count">×{e.count}</span>
-                    <span className="err-msg">{e.message}</span>
+                    <span className="err-msg">{friendly(e.message)?.text ?? e.message}</span>
                   </button>
                   <span className="muted small">
                     {e.workflowName} · {ago(e.lastAt)}

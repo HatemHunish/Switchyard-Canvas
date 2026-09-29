@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, type ClaudeStatus, type DashSummary, type FileRow, type LiveRun, type RunFilters, type RunRow, type UpcomingItem } from '../../api';
+import { api, ApiError, type WorkflowView, type ClaudeStatus, type DashSummary, type FileRow, type LiveRun, type RunFilters, type RunRow, type UpcomingItem } from '../../api';
 import { subscribe } from '../../lib/live';
 import type { HumanRequest } from '../../types';
 import { RespondCard } from '../RespondCard';
+import { Describe } from '../Builder';
+import { useSimple } from '../../lib/mode';
 import { Activity, AttentionStrip, LatestFiles, LiveRuns, type Nav, RecentRuns, StatTiles, Upcoming, WorkflowHealth } from './sections';
 
 interface Props {
@@ -13,6 +15,8 @@ interface Props {
   notify: (msg: string, kind?: 'ok' | 'err') => void;
   onOpenInbox: () => void;
   onWorkflowsChanged: () => void;
+  describeNonce?: number;
+  onCreated: (wf: WorkflowView) => void;
 }
 
 const RANGES = [
@@ -31,7 +35,8 @@ function loadFilters(): RunFilters {
 }
 
 /** Home screen: what needs you, what's running, what's next, and how things have gone. */
-export function Dashboard({ inbox, claude, workflows, nav, notify, onOpenInbox, onWorkflowsChanged }: Props) {
+export function Dashboard({ inbox, claude, workflows, nav, notify, onOpenInbox, onWorkflowsChanged, describeNonce, onCreated }: Props) {
+  const simple = useSimple();
   const [summary, setSummary] = useState<DashSummary | null>(null);
   const [live, setLive] = useState<LiveRun[]>([]);
   const [upcoming, setUpcoming] = useState<UpcomingItem[]>([]);
@@ -133,6 +138,7 @@ export function Dashboard({ inbox, claude, workflows, nav, notify, onOpenInbox, 
   return (
     <div className="dash">
       <AttentionStrip items={summary.attention} cliProblem={cliProblem} nav={nav} onOpenInbox={onOpenInbox} />
+      <Describe focusNonce={describeNonce} onCreated={onCreated} notify={notify} compact={!simple && workflows.length > 0} />
       <StatTiles k={summary.kpis} onFilter={(f) => setFilter(f)} />
 
       <div className="dash-grid dash-cols">

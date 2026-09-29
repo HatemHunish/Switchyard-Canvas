@@ -4,10 +4,26 @@ Build Claude agents visually and run them on your **Claude subscription**: monit
 
 Every agent step runs through the **Claude Code CLI installed on your machine** (`claude -p`), using the account you logged into yourself. The app never asks for, stores or sees credentials, and it doesn't need an API key.
 
+## For everyone: no terminal, no jargon
+
+- **Mac app:** `npm run package:mac` builds `release/Agent Canvas.app` and a `.dmg`, with Node bundled inside. Drag it to Applications and double-click; it starts in the background and opens in your browser. It isn't signed yet, so the first time, right-click → **Open** → **Open**. Settings → **Start Agent Canvas when I log in** keeps schedules running after a restart; **Quit Agent Canvas** stops it. Logs go to `~/Library/Logs/Agent Canvas.log`. The app works on the same kind of Mac (Apple silicon or Intel) it was built on.
+- **Setup screen** on first launch: it detects Claude Code, installs it with Anthropic's official installer if needed, and signs you in to your Claude plan in the browser (`claude auth login`). No terminal. It also asks for your email address (for "send it to me" steps).
+- **Simple mode** (the default; switch in the top bar):
+  - plain names: *AI step*, *If / Otherwise*, *Ask me to approve*…;
+  - "What can it use?" checkboxes instead of tool names, and Fast / Balanced / Best instead of model names;
+  - a folder picker, defaulting to a private folder the AI can't leave;
+  - "Every weekday at 9:00" schedules instead of cron;
+  - "If share of negative mentions is more than 30%" rules instead of code;
+  - technical options hidden;
+  - plain error messages with a fix button, a confirmation before a workflow starts sending things by itself, and a light / moderate / heavy usage hint.
+- **Describe it:** type what you want ("Every morning, check the news and Reddit for my brand and email me a summary"). Claude designs the workflow; you see it as plain steps, answer a few questions (email, brand, folder), optionally ask for changes, and create it. Drafting takes about 20 seconds and a few cents of your plan's usage.
+- **Template wizards:** in Simple mode, a template asks its few questions first ("Your brand name?", "Who gets the report?") and fills them in everywhere.
+- **Steps view** (default in Simple mode): the workflow as a top-to-bottom list with If yes / Otherwise branches, "+ Insert a step here", and click-to-edit. The Canvas view shows the same thing as boxes and connections.
+
 ## Requirements
 
-- Node 20+
-- Claude Code CLI on your `PATH`, logged in: run `claude` once and use `/login`. The badge in the top-right shows the login state.
+- A Claude plan (Pro, Max, Team or Enterprise) and Claude Code. The Setup screen installs Claude Code and signs you in if needed; or, in a terminal, run `claude` once and use `/login`. The badge in the top-right shows the login state.
+- To build from source: Node 20+ (for the Mac app, the official nodejs.org or nvm build, not Homebrew's).
 
 ## Run
 
@@ -18,6 +34,8 @@ npm start          # http://127.0.0.1:3002
 ```
 
 Dev mode: `npm run dev` (Nest on :3002 plus Vite on :5173 with hot reload).
+
+Mac app: `npm run package:mac` builds `release/Agent Canvas.app` and `release/Agent-Canvas-<version>.dmg` to hand to people who don't use a terminal.
 
 Environment variables: `PORT` (default 3002), `HOST` (default `127.0.0.1`), `AGENT_CANVAS_HOME` (data folder, default `~/.agent-canvas`), `CLAUDE_BIN`.
 

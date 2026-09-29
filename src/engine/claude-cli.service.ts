@@ -3,7 +3,7 @@ import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { createInterface } from 'readline';
-import { loadSettings } from '../common/paths';
+import { childPath, loadSettings, resolveClaude } from '../common/paths';
 import { runtime } from '../common/runtime';
 import { NodeEvent, PermissionMode } from '../common/types';
 import { EventBus } from './event-bus';
@@ -147,9 +147,9 @@ export class ClaudeCliService {
         resolve(r);
       };
 
-      const child = spawn(loadSettings().claudeBin, args, {
+      const child = spawn(resolveClaude(loadSettings().claudeBin), args, {
         cwd: o.cwd,
-        env: { ...process.env, ...o.env },
+        env: { ...process.env, PATH: childPath(), ...o.env },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
 

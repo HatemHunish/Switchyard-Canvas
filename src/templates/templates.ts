@@ -1,4 +1,4 @@
-import { AgentData, WfEdge, WfNode } from '../common/types';
+import { AgentData, SetupQuestion, WfEdge, WfNode } from '../common/types';
 import { INSIGHT_TEMPLATES } from './insight-templates';
 
 export interface WorkflowTemplate {
@@ -6,6 +6,8 @@ export interface WorkflowTemplate {
   name: string;
   description: string;
   pattern: 'monitor' | 'triggered' | 'pipeline' | 'human' | 'memory' | 'orchestrator' | 'output' | 'insights';
+  /** Questions the wizard asks before creating it. */
+  setup?: SetupQuestion[];
   nodes: WfNode[];
   edges: WfEdge[];
 }
@@ -34,6 +36,11 @@ export const TEMPLATES: WorkflowTemplate[] = [
     name: 'Weekly report → PDF + email',
     description: 'Every Monday 9:00 an agent writes a report; you approve it; it becomes a PDF and a PowerPoint, is saved to Documents and drafted as an email.',
     pattern: 'output',
+    setup: [
+      { id: 'folder', label: 'Which folder has the material for the report?', type: 'folder', help: 'Notes, spreadsheets or documents the report should be based on.', targets: [{ node: 'writer', path: 'cwd' }] },
+      { id: 'email', label: 'Who should get the report?', type: 'email', placeholder: 'team@example.com', targets: [{ node: 'mail', path: 'to' }] },
+      { id: 'time', label: 'What time on Monday?', type: 'time', default: '09:00', targets: [{ node: 'monday', path: '@time' }] },
+    ],
     nodes: [
       { id: 'monday', kind: 'trigger.schedule', position: at(0), data: { mode: 'cron', cron: '0 9 * * 1', everyMinutes: 60 } },
       {
@@ -66,6 +73,9 @@ export const TEMPLATES: WorkflowTemplate[] = [
     name: 'Research team (orchestrator)',
     description: 'Give a task to an orchestrator; it decides which team members to use (researcher, analyst, writer), in what order or in parallel, and combines their work.',
     pattern: 'orchestrator',
+    setup: [
+      { id: 'task', label: 'What should the team research or produce?', type: 'text', placeholder: 'Compare the 3 best CRM tools for a 10-person sales team', required: true, targets: [{ node: 'lead', path: 'prompt' }] },
+    ],
     nodes: [
       { id: 'start', kind: 'trigger.manual', position: at(0), data: {} },
       {
@@ -182,6 +192,9 @@ export const TEMPLATES: WorkflowTemplate[] = [
     name: 'Docs Q&A with memory',
     description: 'Point a Memory node at your docs (RAG). An agent answers a question from them, citing sources, and saves what it learned.',
     pattern: 'memory',
+    setup: [
+      { id: 'docs', label: 'Which folder has your documents?', type: 'folder', required: true, targets: [{ node: 'docs', path: 'sources' }, { node: 'answer', path: 'cwd' }] },
+    ],
     nodes: [
       {
         id: 'docs',
@@ -210,6 +223,9 @@ export const TEMPLATES: WorkflowTemplate[] = [
     name: 'Log monitor',
     description: 'Every 15 minutes, scan a log folder. If something serious shows up, draft an incident note.',
     pattern: 'monitor',
+    setup: [
+      { id: 'folder', label: 'Which folder has the logs?', type: 'folder', required: true, targets: [{ node: 'scan', path: 'cwd' }, { node: 'incident', path: 'cwd' }] },
+    ],
     nodes: [
       { id: 'every15', kind: 'trigger.schedule', position: at(0), data: { mode: 'interval', everyMinutes: 15, cron: '*/15 * * * *' } },
       {
@@ -238,7 +254,7 @@ export const TEMPLATES: WorkflowTemplate[] = [
           ),
         }),
       },
-      { id: 'isHigh', kind: 'condition', position: at(2), data: { mode: 'expression', expression: "output.severity === 'high'" } },
+      { id: 'isHigh', kind: 'condition', label: 'The scanner rates it high severity', position: at(2), data: { mode: 'expression', expression: "output.severity === 'high'" } },
       {
         id: 'incident',
         kind: 'agent',
@@ -260,6 +276,9 @@ export const TEMPLATES: WorkflowTemplate[] = [
     name: 'Code review pipeline',
     description: 'Read the current git diff, review it for bugs and style in parallel, then merge into one summary.',
     pattern: 'pipeline',
+    setup: [
+      { id: 'repo', label: 'Which project folder (git repository)?', type: 'folder', required: true, targets: [{ node: 'diff', path: 'cwd' }, { node: 'bugs', path: 'cwd' }, { node: 'style', path: 'cwd' }, { node: 'summary', path: 'cwd' }] },
+    ],
     nodes: [
       { id: 'start', kind: 'trigger.manual', position: at(0, 1), data: {} },
       {
@@ -315,6 +334,9 @@ export const TEMPLATES: WorkflowTemplate[] = [
     name: 'Inbox processor',
     description: 'When a file lands in a folder, summarize it; if it needs action, extract tasks.',
     pattern: 'triggered',
+    setup: [
+      { id: 'folder', label: 'Which folder should it watch?', type: 'folder', help: 'Drop a file in this folder and it gets summarised.', required: true, targets: [{ node: 'drop', path: 'path' }, { node: 'summarize', path: 'cwd' }] },
+    ],
     nodes: [
       { id: 'drop', kind: 'trigger.file', position: at(0), data: { path: '~/Desktop/inbox', events: ['add'], debounceMs: 1500 } },
       {

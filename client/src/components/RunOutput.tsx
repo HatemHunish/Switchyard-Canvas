@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { openViewer } from '../lib/viewer';
+import { FriendlyError } from './FriendlyError';
 import type { NodeEvent, NodeRun } from '../types';
 
 function EventRow({ e }: { e: NodeEvent }) {
@@ -61,7 +62,7 @@ export function RunOutput({ nodeRun, preferText }: { nodeRun: NodeRun; preferTex
 
       {tab === 'output' && (
         <div className="runout-body">
-          {nodeRun.error && <div className="err">{nodeRun.error}</div>}
+          {nodeRun.error && <FriendlyError error={nodeRun.error} />}
           {out?.files?.length ? (
             <ul className="files-out">
               {out.files.map((f) => (

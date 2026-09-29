@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
+import { delimiter } from 'path';
 import { homedir } from 'os';
 import { join } from 'path';
 
@@ -7,10 +8,13 @@ export const DATA_DIR = process.env.AGENT_CANVAS_HOME || join(homedir(), '.agent
 export const WORKFLOWS_DIR = join(DATA_DIR, 'workflows');
 export const DB_PATH = join(DATA_DIR, 'runs.db');
 export const PLUGINS_DIR = join(DATA_DIR, 'plugins');
+/** Default folder for AI steps that don't need your files: they can't see anything else. */
+export const WORKSPACE_DIR = join(DATA_DIR, 'workspace');
 const SETTINGS_PATH = join(DATA_DIR, 'settings.json');
 
 mkdirSync(WORKFLOWS_DIR, { recursive: true });
 mkdirSync(PLUGINS_DIR, { recursive: true });
+mkdirSync(WORKSPACE_DIR, { recursive: true });
 
 export interface Settings {
   /** Max `claude` processes running at once (they share one subscription). */
@@ -31,6 +35,12 @@ export interface Settings {
   smtp: { host: string; port: number; secure: boolean; user: string; from: string };
   /** Per-plugin switches. Built-ins default on; plugins from the folder default off until you enable them. */
   plugins: Record<string, { enabled?: boolean }>;
+  /** 'simple' hides technical settings and uses plain language; 'advanced' shows everything. */
+  uiMode: 'simple' | 'advanced';
+  /** The first-run setup was completed or skipped. */
+  setupDone: boolean;
+  /** The user's own email: the default recipient for "send it to me" steps and notifications. */
+  userEmail: string;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -43,6 +53,9 @@ const DEFAULT_SETTINGS: Settings = {
   publicUrl: '',
   smtp: { host: '', port: 587, secure: false, user: '', from: '' },
   plugins: {},
+  uiMode: 'simple',
+  setupDone: false,
+  userEmail: '',
 };
 
 export function loadSettings(): Settings {
@@ -58,5 +71,24 @@ export function loadSettings(): Settings {
 export function saveSettings(settings: Settings): void {
   writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
 }
+
+/**
+ * Started from Finder (the Mac app), PATH is only /usr/bin:/bin, so look where
+ * the Claude Code installers put the CLI as well.
+ */
+export const EXTRA_BIN_DIRS = [join(homedir(), '.local', 'bin'), join(homedir(), '.claude', 'local'), '/opt/homebrew/bin', '/usr/local/bin', join(homedir(), '.npm-global', 'bin'), join(homedir(), '.bun', 'bin')];
+
+export function resolveClaude(configured: string): string {
+  if (configured.includes('/')) return expandHome(configured);
+  const dirs = [...(process.env.PATH ?? '').split(delimiter), ...EXTRA_BIN_DIRS].filter(Boolean);
+  for (const d of dirs) {
+    const p = join(d, configured);
+    if (existsSync(p)) return p;
+  }
+  return configured;
+}
+
+/** PATH for child processes, including the usual install locations (Finder-launched apps get a bare PATH). */
+export const childPath = () => [...new Set([...(process.env.PATH ?? '').split(delimiter), ...EXTRA_BIN_DIRS])].filter(Boolean).join(delimiter);
 
 export const expandHome = (p: string) => p.replace(/^~(?=$|\/)/, homedir());

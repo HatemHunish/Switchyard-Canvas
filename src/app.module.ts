@@ -20,6 +20,8 @@ import { DatasetsController } from './datasets/datasets.controller';
 import { DatasetsService } from './datasets/datasets.service';
 import { PluginsController } from './plugins/plugins.controller';
 import { PluginsService } from './plugins/plugins.service';
+import { AssistantController } from './assistant/assistant.controller';
+import { AssistantService } from './assistant/assistant.service';
 import { SystemController } from './system/system.controller';
 import { HooksController } from './triggers/hooks.controller';
 import { TriggersService } from './triggers/triggers.service';
@@ -35,7 +37,7 @@ const staticImports: DynamicModule[] = existsSync(join(clientDist, 'index.html')
 
 @Module({
   imports: [...staticImports],
-  controllers: [WorkflowsController, RunsController, HooksController, SystemController, MemoryController, FilesController, DashboardController, ReviewPageController, NotifyTestController, PluginsController, DatasetsController],
-  providers: [WorkflowsService, RunsStore, EventBus, ProcessQueue, ClaudeCliService, ExecutorService, InboxService, MemoryService, ActionsService, TriggersService, ExportService, PluginsService, DatasetsService],
+  controllers: [WorkflowsController, RunsController, HooksController, SystemController, MemoryController, FilesController, DashboardController, ReviewPageController, NotifyTestController, PluginsController, DatasetsController, AssistantController],
+  providers: [WorkflowsService, RunsStore, EventBus, ProcessQueue, ClaudeCliService, ExecutorService, InboxService, MemoryService, ActionsService, TriggersService, ExportService, PluginsService, DatasetsService, AssistantService],
 })
 export class AppModule {}

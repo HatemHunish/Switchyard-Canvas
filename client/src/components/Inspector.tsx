@@ -8,6 +8,8 @@ import { NotifyEditor } from './NotifyEditor';
 import { RespondCard } from './RespondCard';
 import { RunOutput } from './RunOutput';
 import { DatasetFields, InsightFields, PluginToolsPicker, SourceFields } from './SourceInspector';
+import { CapabilityPicker, FolderPicker, QualityPicker, RuleBuilder, SchedulePicker } from './SimpleFields';
+import { useSimple } from '../lib/mode';
 
 interface Props {
   node: FlowNodeType;
@@ -34,6 +36,8 @@ interface Props {
   onRun: () => void;
   onOpenPlugins: () => void;
   onOpenInsights: (dataset: string) => void;
+  /** The steps feeding this one (Simple mode's "If" builder offers what they produce). */
+  upstream?: Array<{ kind: string; config: Record<string, any> }>;
 }
 
 function Field({ label, hint, children }: { label: string; hint?: React.ReactNode; children: React.ReactNode }) {
@@ -102,10 +106,13 @@ function copy(text: string) {
   void navigator.clipboard?.writeText(text);
 }
 
-export function Inspector({ node, workflowId, workflowName, webhookToken, saved, nodeRun, trigger, issues, pending, loopTarget, team, workerOf, onSelectNode, notify, onChange, onLabel, onDelete, onRun, onOpenPlugins, onOpenInsights }: Props) {
+export function Inspector({ node, workflowId, workflowName, webhookToken, saved, nodeRun, trigger, issues, pending, loopTarget, team, workerOf, onSelectNode, notify, onChange, onLabel, onDelete, onRun, onOpenPlugins, onOpenInsights, upstream = [] }: Props) {
+  const simple = useSimple();
   const d = node.data.config;
   const kind = node.data.kind;
   const meta = metaOf(kind, d);
+  const kindTitle = simple && meta.simple ? meta.simple.title : meta.title;
+  const kindHint = simple && meta.simple ? meta.simple.hint : meta.hint;
   const set = (key: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => onChange({ [key]: e.target.value });
 
   const hookUrl = `${location.origin}/api/hooks/${workflowId}/${node.id}`;
@@ -124,8 +131,8 @@ export function Inspector({ node, workflowId, workflowName, webhookToken, saved,
           {meta.icon}
         </span>
         <div>
-          <div className="insp-kind">{meta.title}</div>
-          <div className="insp-hint">{meta.hint}</div>
+          <div className="insp-kind">{kindTitle}</div>
+          <div className="insp-hint">{kindHint}</div>
         </div>
         <button className="btn ghost danger sm" onClick={onDelete} title="Delete step (Del)">
           Delete
@@ -199,12 +206,14 @@ export function Inspector({ node, workflowId, workflowName, webhookToken, saved,
                   </p>
                 </div>
               )}
-              <Field label="Name" hint={kind === 'agent' ? 'Also the file name when exported to .claude/agents/' : undefined}>
+              <Field label="Name" hint={kind === 'agent' && !simple ? 'Also the file name when exported to .claude/agents/' : undefined}>
                 <input value={d.name} onChange={set('name')} />
               </Field>
-              <Field label="Description" hint={workerOf ? 'Important: the orchestrator uses this to decide when to call this member.' : undefined}>
+              {(!simple || workerOf || kind === 'orchestrator') && (
+              <Field label={simple ? 'What is it for? (one line)' : 'Description'} hint={workerOf ? 'Important: the orchestrator uses this to decide when to call this member.' : undefined}>
                 <input value={d.description ?? ''} placeholder={kind === 'orchestrator' ? 'What this orchestrator coordinates' : 'What this agent is for'} onChange={set('description')} />
               </Field>
+              )}
               {kind === 'orchestrator' && (
                 <label className="toggle-row">
                   <input type="checkbox" checked={!!d.parallel} onChange={(e) => onChange({ parallel: e.target.checked })} />
@@ -215,9 +224,11 @@ export function Inspector({ node, workflowId, workflowName, webhookToken, saved,
                 </label>
               )}
               <Field
-                label={workerOf ? 'Standing instructions' : 'Task prompt'}
+                label={workerOf ? 'Standing instructions' : simple ? 'What should it do?' : 'Task prompt'}
                 hint={
-                  <>
+                  simple ? (
+                    'Write it like you would to a capable assistant: the goal, what to include, and the format you want. It automatically gets the result of the step before it.'
+                  ) : <>
                     Variables: <code>{'{{input}}'}</code> previous step, <code>{'{{trigger.payload}}'}</code>, <code>{'{{nodes.<name>.output}}'}</code>, <code>{'{{date}}'}</code>. Input is appended
                     automatically if you don’t place it.
                   </>
@@ -225,6 +236,14 @@ export function Inspector({ node, workflowId, workflowName, webhookToken, saved,
               >
                 <textarea rows={6} value={d.prompt} onChange={set('prompt')} placeholder="What should this agent do?" />
               </Field>
+              {simple ? (
+                <>
+                  <QualityPicker model={d.model} onChange={(model) => onChange({ model })} />
+                  <FolderPicker value={d.cwd} onChange={(cwd) => onChange({ cwd })} />
+                  <CapabilityPicker tools={d.allowedTools ?? []} onChange={(allowedTools) => onChange({ allowedTools })} />
+                </>
+              ) : (
+                <>
               <Field label="Persona / system prompt" hint="Appended to Claude Code’s default system prompt.">
                 <textarea rows={3} value={d.systemPrompt ?? ''} onChange={set('systemPrompt')} placeholder="You are a meticulous SRE…" />
               </Field>
@@ -252,7 +271,11 @@ export function Inspector({ node, workflowId, workflowName, webhookToken, saved,
               <Field label="Allowed tools" hint="Anything not listed is denied (headless runs never prompt). Empty = no tools.">
                 <ToolsInput value={d.allowedTools ?? []} onChange={(v) => onChange({ allowedTools: v })} suggestions={COMMON_TOOLS} />
               </Field>
+                </>
+              )}
               <PluginToolsPicker value={d.pluginTools ?? []} onChange={(v) => onChange({ pluginTools: v })} />
+              {!simple && (
+                <>
               <Field label="Blocked tools">
                 <ToolsInput value={d.disallowedTools ?? []} onChange={(v) => onChange({ disallowedTools: v })} />
               </Field>
@@ -283,6 +306,8 @@ export function Inspector({ node, workflowId, workflowName, webhookToken, saved,
               >
                 <textarea rows={d.outputSchema ? 7 : 2} className="mono" value={d.outputSchema ?? ''} onChange={set('outputSchema')} placeholder='{"type":"object",…}' />
               </Field>
+                </>
+              )}
               <label className="toggle-row">
               <input type="checkbox" checked={!!d.canAsk} onChange={(e) => onChange({ canAsk: e.target.checked })} />
               <span>
@@ -303,9 +328,11 @@ export function Inspector({ node, workflowId, workflowName, webhookToken, saved,
                 </div>
               </>
             )}
-            <Field label="Max turns (export only)">
+            {!simple && (
+              <Field label="Max turns (export only)">
                 <input type="number" min={1} value={d.maxTurns ?? ''} onChange={(e) => onChange({ maxTurns: e.target.value ? Number(e.target.value) : undefined })} />
               </Field>
+            )}
             </>
           )}
 
@@ -313,10 +340,10 @@ export function Inspector({ node, workflowId, workflowName, webhookToken, saved,
             <>
               <div className="seg">
                 <button className={d.mode !== 'llm' ? 'on' : ''} onClick={() => onChange({ mode: 'expression' })}>
-                  Rule
+                  {simple ? 'Check a number or word' : 'Rule'}
                 </button>
                 <button className={d.mode === 'llm' ? 'on' : ''} onClick={() => onChange({ mode: 'llm' })}>
-                  Ask Claude
+                  {simple ? 'Ask Claude yes or no' : 'Ask Claude'}
                 </button>
               </div>
               {d.mode === 'llm' ? (
@@ -324,10 +351,14 @@ export function Inspector({ node, workflowId, workflowName, webhookToken, saved,
                   <Field label="Yes/no question" hint="A small no-tools Claude run answers this about the incoming output.">
                     <textarea rows={3} value={d.question ?? ''} onChange={set('question')} placeholder="Does this mention a production outage?" />
                   </Field>
-                  <Field label="Model">
-                    <input list="models" value={d.model ?? 'haiku'} onChange={set('model')} />
-                  </Field>
+                  {!simple && (
+                    <Field label="Model">
+                      <input list="models" value={d.model ?? 'haiku'} onChange={set('model')} />
+                    </Field>
+                  )}
                 </>
+              ) : simple ? (
+                <RuleBuilder config={d} upstream={upstream} onChange={onChange} />
               ) : (
                 <Field
                   label="Expression"
@@ -641,7 +672,8 @@ export function Inspector({ node, workflowId, workflowName, webhookToken, saved,
             </Field>
           )}
 
-          {kind === 'trigger.schedule' && (
+          {kind === 'trigger.schedule' && simple && <SchedulePicker config={d} onChange={onChange} />}
+          {kind === 'trigger.schedule' && !simple && (
             <>
               <div className="seg">
                 <button className={d.mode !== 'cron' ? 'on' : ''} onClick={() => onChange({ mode: 'interval' })}>

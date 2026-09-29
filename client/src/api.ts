@@ -1,4 +1,4 @@
-import type { DatasetItem, HumanRequest, HumanResponse, Item, MemoryItem, MemoryStats, NodeRun, NotifyConfig, Run, UsageInfo, WfEdge, WfNode, Workflow } from './types';
+import type { DatasetItem, SetupQuestion, HumanRequest, HumanResponse, Item, MemoryItem, MemoryStats, NodeRun, NotifyConfig, Run, UsageInfo, WfEdge, WfNode, Workflow } from './types';
 
 export interface ValidationIssue {
   nodeId?: string;
@@ -23,6 +23,20 @@ export interface TemplateInfo {
   description: string;
   pattern: 'monitor' | 'triggered' | 'pipeline' | 'human' | 'memory' | 'orchestrator' | 'output' | 'insights' | 'plugin';
   nodeCount: number;
+  setup?: SetupQuestion[];
+  nodes: WfNode[];
+  edges: WfEdge[];
+}
+
+export interface Draft {
+  name: string;
+  description: string;
+  notes?: string;
+  nodes: WfNode[];
+  edges: WfEdge[];
+  questions: SetupQuestion[];
+  issues: string[];
+  costUsd: number;
 }
 
 export interface PluginField {
@@ -144,6 +158,18 @@ export interface Settings {
   smtp: { host: string; port: number; secure: boolean; user: string; from: string };
   hasSmtpPassword?: boolean;
   detectedChrome?: string | null;
+  uiMode: 'simple' | 'advanced';
+  setupDone: boolean;
+  userEmail: string;
+  /** Private folder new AI steps use by default. */
+  workspaceDir?: string;
+}
+
+export interface SetupJob {
+  kind: 'install' | 'login' | null;
+  log?: string[];
+  running?: boolean;
+  exitCode?: number | null;
 }
 
 // ---- dashboard ----
@@ -269,7 +295,9 @@ export const api = {
   runWorkflow: (id: string, triggerNodeId?: string, payload?: unknown) => req<Run>('POST', `/api/workflows/${id}/run`, { triggerNodeId, payload }),
   exportAgents: (id: string, dir: string) => req<{ directory: string; files: string[] }>('POST', `/api/workflows/${id}/export`, { dir }),
   templates: () => req<TemplateInfo[]>('GET', '/api/templates'),
-  fromTemplate: (key: string) => req<WorkflowView>('POST', `/api/templates/${key}`),
+  fromTemplate: (key: string, answers?: Record<string, string>) => req<WorkflowView>('POST', `/api/templates/${encodeURIComponent(key)}`, { answers }),
+  draftWorkflow: (description: string, previous?: Draft, change?: string) => req<Draft>('POST', '/api/assistant/draft', { description, previous, change }),
+  createFromDraft: (draft: Draft, answers: Record<string, string>) => req<WorkflowView>('POST', '/api/assistant/create', { draft, answers }),
   runs: (workflowId: string) => req<Run[]>('GET', `/api/runs?workflowId=${workflowId}`),
   run: (id: string) => req<{ run: Run; nodes: NodeRun[]; requests: HumanRequest[] }>('GET', `/api/runs/${id}`),
   inbox: () => req<HumanRequest[]>('GET', '/api/inbox'),
@@ -301,6 +329,14 @@ export const api = {
   claude: (refresh = false) => req<ClaudeStatus>('GET', `/api/system/claude${refresh ? '?refresh=1' : ''}`),
   usage: () => req<{ usage: UsageInfo | null; queue: { active: number; waiting: number; limit: number } }>('GET', '/api/system/usage'),
   settings: () => req<Settings>('GET', '/api/system/settings'),
+  installClaude: () => req<{ started: boolean }>('POST', '/api/system/claude/install'),
+  loginClaude: (email?: string) => req<{ started: boolean }>('POST', '/api/system/claude/login', { email }),
+  setupJob: () => req<SetupJob>('GET', '/api/system/claude/job'),
+  cancelSetupJob: () => req<{ cancelled: boolean }>('POST', '/api/system/claude/job/cancel'),
+  chooseFolder: (prompt?: string) => req<{ path: string | null }>('POST', '/api/system/choose-folder', { prompt }),
+  quit: () => req<{ quitting: boolean }>('POST', '/api/system/quit'),
+  appInfo: () => req<{ bundled: boolean; loginItem: boolean }>('GET', '/api/system/app'),
+  setLoginItem: (enabled: boolean) => req<{ loginItem: boolean }>('PUT', '/api/system/login-item', { enabled }),
   plugins: () => req<PluginList>('GET', '/api/plugins'),
   setPluginEnabled: (id: string, enabled: boolean) => req<{ enabled: boolean }>('PUT', `/api/plugins/${id}`, { enabled }),
   savePluginCredentials: (id: string, values: Record<string, string>) => req<{ credentialsSet: Record<string, boolean> }>('PUT', `/api/plugins/${id}/credentials`, { values }),

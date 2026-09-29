@@ -7,6 +7,7 @@ import { MemoryService, storeIdFor } from '../memory/memory.service';
 import { PluginsService } from '../plugins/plugins.service';
 import { TEMPLATES } from '../templates/templates';
 import { TriggersService } from '../triggers/triggers.service';
+import { applyAnswers } from './answers';
 import { validateWorkflow } from './validate';
 import { WorkflowsService } from './workflows.service';
 
@@ -105,13 +106,15 @@ export class WorkflowsController {
 
   @Get('templates')
   templates() {
-    return this.allTemplates().map(({ key, name, description, pattern, nodes }) => ({ key, name, description, pattern, nodeCount: nodes.length }));
+    return this.allTemplates().map((t) => ({ key: t.key, name: t.name, description: t.description, pattern: t.pattern, nodeCount: t.nodes.length, setup: 'setup' in t ? t.setup : undefined, nodes: t.nodes, edges: t.edges }));
   }
 
+  /** Creates a workflow from a template, filled in with the wizard's answers (if any). */
   @Post('templates/:key')
-  fromTemplate(@Param('key') key: string) {
+  fromTemplate(@Param('key') key: string, @Body() body: { answers?: Record<string, string>; name?: string }) {
     const t = this.allTemplates().find((x) => x.key === key);
     if (!t) throw new NotFoundException('Unknown template');
-    return this.view(this.workflows.create({ name: t.name, description: t.description, nodes: structuredClone(t.nodes), edges: structuredClone(t.edges) }));
+    const nodes = applyAnswers(t.nodes, 'setup' in t ? t.setup : undefined, body?.answers ?? {});
+    return this.view(this.workflows.create({ name: body?.name?.trim() || t.name, description: t.description, nodes, edges: structuredClone(t.edges) }));
   }
 }

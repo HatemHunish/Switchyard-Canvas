@@ -1,6 +1,7 @@
 import type { PluginInfo } from '../api';
 import type { NodeKind } from '../types';
 import { pluginById, sourceDef, sourceDefaults } from './plugins';
+import { capsText, qualityLabel, ruleText, scheduleText } from './plain';
 
 export interface KindMeta {
   /** Palette entry id; several entries can share a kind (e.g. the action types). */
@@ -12,11 +13,16 @@ export interface KindMeta {
   hint: string;
   color: string;
   defaults: () => Record<string, any>;
+  /** Plain name and hint for Simple mode. */
+  simple?: { title: string; hint: string };
+  /** Hidden from the palette in Simple mode. */
+  advancedOnly?: boolean;
 }
 
 export const KINDS: KindMeta[] = [
   {
     key: 'trigger.manual',
+    simple: { title: "Run button", hint: "Start it yourself, whenever you want" },
     kind: 'trigger.manual',
     title: 'Manual',
     icon: '▶',
@@ -27,6 +33,7 @@ export const KINDS: KindMeta[] = [
   },
   {
     key: 'trigger.schedule',
+    simple: { title: "On a schedule", hint: "Every morning, every hour, every Monday…" },
     kind: 'trigger.schedule',
     title: 'Schedule',
     icon: '⏱',
@@ -37,6 +44,7 @@ export const KINDS: KindMeta[] = [
   },
   {
     key: 'trigger.file',
+    simple: { title: "When a file arrives", hint: "Start when a file is added or changed in a folder" },
     kind: 'trigger.file',
     title: 'File watch',
     icon: '📁',
@@ -47,6 +55,7 @@ export const KINDS: KindMeta[] = [
   },
   {
     key: 'trigger.webhook',
+    advancedOnly: true,
     kind: 'trigger.webhook',
     title: 'Webhook',
     icon: '⚡',
@@ -57,6 +66,7 @@ export const KINDS: KindMeta[] = [
   },
   {
     key: 'agent',
+    simple: { title: "AI step", hint: "Claude does a task: write, research, summarise, analyse" },
     kind: 'agent',
     title: 'Agent',
     icon: '✦',
@@ -81,6 +91,7 @@ export const KINDS: KindMeta[] = [
   },
   {
     key: 'orchestrator',
+    simple: { title: "AI team", hint: "Claude splits a big task between helper steps" },
     kind: 'orchestrator',
     title: 'Orchestrator',
     icon: '⎈',
@@ -106,6 +117,7 @@ export const KINDS: KindMeta[] = [
   },
   {
     key: 'insight',
+    simple: { title: "Label mentions", hint: "Mark each new item positive or negative, with topics" },
     kind: 'insight',
     title: 'Insight',
     icon: '💡',
@@ -116,6 +128,7 @@ export const KINDS: KindMeta[] = [
   },
   {
     key: 'human',
+    simple: { title: "Ask me to approve", hint: "Pause until you approve it or give feedback" },
     kind: 'human',
     title: 'Human review',
     icon: '👤',
@@ -126,6 +139,7 @@ export const KINDS: KindMeta[] = [
   },
   {
     key: 'memory',
+    simple: { title: "Notes & documents", hint: "Things the AI should know, and remembers for next time" },
     kind: 'memory',
     title: 'Memory',
     icon: '🧠',
@@ -145,6 +159,7 @@ export const KINDS: KindMeta[] = [
   },
   {
     key: 'dataset',
+    simple: { title: "Collected data", hint: "Let an AI step analyse what your sources collected" },
     kind: 'dataset',
     title: 'Dataset',
     icon: '🗂️',
@@ -155,6 +170,7 @@ export const KINDS: KindMeta[] = [
   },
   {
     key: 'condition',
+    simple: { title: "If / Otherwise", hint: "Go one way or another depending on the result" },
     kind: 'condition',
     title: 'Condition',
     icon: '◇',
@@ -165,6 +181,7 @@ export const KINDS: KindMeta[] = [
   },
   {
     key: 'merge',
+    advancedOnly: true,
     kind: 'merge',
     title: 'Merge',
     icon: '⋈',
@@ -175,6 +192,7 @@ export const KINDS: KindMeta[] = [
   },
   {
     key: 'output',
+    simple: { title: "Make a file", hint: "Turn the result into a PDF, Word, PowerPoint, Excel…" },
     kind: 'output',
     title: 'Output file',
     icon: '📄',
@@ -225,6 +243,7 @@ export const KINDS: KindMeta[] = [
   },
   {
     key: 'action.open',
+    advancedOnly: true,
     kind: 'action',
     title: 'Open file',
     icon: '↗',
@@ -302,7 +321,21 @@ export const isBranching = (kind: string) => kind === 'condition' || kind === 'h
 
 export const isTrigger = (kind: string) => kind.startsWith('trigger.');
 
-export function subtitle(kind: string, data: Record<string, any>): string {
+export function subtitle(kind: string, data: Record<string, any>, simple = false): string {
+  if (simple) {
+    switch (kind) {
+      case 'trigger.schedule':
+        return scheduleText(data);
+      case 'agent':
+        return `${qualityLabel(data.model)} · ${capsText(data.allowedTools)}${data.canAsk ? ' · can ask you' : ''}`;
+      case 'orchestrator':
+        return `${qualityLabel(data.model)} · leads a team`;
+      case 'condition':
+        return data.mode === 'llm' ? `Asks: ${data.question || '…'}` : data.rule ? ruleText(data.rule) : 'custom rule';
+      case 'human':
+        return data.onReject === 'revise' ? 'you approve or send it back' : 'you approve or reject';
+    }
+  }
   switch (kind) {
     case 'trigger.schedule':
       return data.mode === 'cron' ? `cron ${data.cron}` : `every ${data.everyMinutes} min`;
@@ -363,6 +396,18 @@ export function subtitle(kind: string, data: Record<string, any>): string {
       return '';
   }
 }
+
+/** Palette group names in Simple mode. */
+export const SIMPLE_GROUPS: Record<string, string> = {
+  Triggers: 'Start',
+  Sources: 'Collect',
+  Steps: 'AI',
+  People: 'You',
+  Context: 'Knowledge',
+  Logic: 'Decide',
+  Output: 'Files',
+  Actions: 'Then',
+};
 
 export const COMMON_TOOLS = ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash', 'Bash(git *)', 'WebFetch', 'WebSearch'];
 export const MODELS = ['haiku', 'sonnet', 'opus', 'fable'];

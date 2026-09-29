@@ -2,6 +2,7 @@ import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { memo } from 'react';
 import { FORMATS, isAgentLike, isBranching, isStore, isTrigger, metaOf, subtitle } from '../../lib/nodeMeta';
 import { usePlugins } from '../../lib/plugins';
+import { useSimple } from '../../lib/mode';
 import type { NodeKind, NodeRun } from '../../types';
 
 export type FlowData = {
@@ -36,7 +37,10 @@ function duration(run?: FlowData['run']) {
 function FlowNodeImpl({ data, selected }: NodeProps<FlowNodeType>) {
   // Source titles/icons come from the plugin catalog, which loads after the canvas.
   usePlugins();
+  const simple = useSimple();
   const meta = metaOf(data.kind, data.config);
+  const kindTitle = simple && meta.simple ? meta.simple.title : meta.title;
+  const sub = subtitle(data.kind, data.config, simple);
   const title =
     isAgentLike(data.kind) || isStore(data.kind)
       ? data.config.name || meta.title
@@ -77,11 +81,11 @@ function FlowNodeImpl({ data, selected }: NodeProps<FlowNodeType>) {
           </span>
         )}
       </div>
-      <div className="fnode-sub" title={subtitle(data.kind, data.config)}>
-        {subtitle(data.kind, data.config)}
+      <div className="fnode-sub" title={sub}>
+        {sub}
       </div>
       <div className="fnode-foot">
-        <span className="fnode-kind">{meta.title}</span>
+        <span className="fnode-kind">{kindTitle}</span>
         {status && status !== 'pending' && (
           <span className={`fnode-status st-${status}`}>
             {status === 'running' && <span className="spinner" />}

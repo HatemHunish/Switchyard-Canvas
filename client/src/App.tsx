@@ -7,6 +7,10 @@ import { Editor } from './components/Editor';
 import { FileViewer } from './components/FileViewer';
 import { datasetIdFor, Insights } from './components/insights/Insights';
 import { PluginsPage } from './components/PluginsPage';
+import { Setup } from './components/Setup';
+import { Describe, TemplateWizard } from './components/Builder';
+import { loadMode, saveProfile, setMode, useSettingsState } from './lib/mode';
+import { friendly } from './lib/plain';
 import { RespondCard } from './components/RespondCard';
 import { subscribe } from './lib/live';
 import type { HumanRequest, UsageInfo } from './types';
@@ -21,24 +25,18 @@ const VIEWS: Array<{ id: View; label: string }> = [
   { id: 'plugins', label: 'Plugins' },
 ];
 
-function ClaudeBadge({ status, onRefresh }: { status: ClaudeStatus | null; onRefresh: () => void }) {
-  if (!status) return <span className="badge">Checking Claude Code…</span>;
-  if (!status.installed)
+function ClaudeBadge({ status, onRefresh, onSetup }: { status: ClaudeStatus | null; onRefresh: () => void; onSetup: () => void }) {
+  if (!status) return <span className="badge">Checking Claude…</span>;
+  if (!status.installed || !status.loggedIn)
     return (
-      <span className="badge bad" title={status.error}>
-        Claude Code CLI not found
-      </span>
-    );
-  if (!status.loggedIn)
-    return (
-      <button className="badge bad" onClick={onRefresh} title="Run `claude` in a terminal and use /login, then click to re-check">
-        Not logged in · run <code>claude</code> → /login
+      <button className="badge bad" onClick={onSetup} title={status.error}>
+        {!status.installed ? 'Claude isn’t installed · Set up' : 'Claude isn’t connected · Connect'}
       </button>
     );
   const sub = status.authMethod === 'claude.ai' ? `${status.subscriptionType ?? 'subscription'} plan` : (status.authMethod ?? 'logged in');
   return (
     <button className="badge ok" onClick={onRefresh} title={`${status.version} · click to re-check`}>
-      ● Claude Code · {sub}
+      ● Claude · {sub}
     </button>
   );
 }
@@ -66,7 +64,47 @@ function UsageMeter({ usage, queue }: { usage: UsageInfo | null; queue?: { activ
   );
 }
 
-function SettingsDialog({ onClose, notify }: { onClose: () => void; notify: (m: string, k?: 'ok' | 'err') => void }) {
+/** Only in the packaged Mac app: start at login, and quit (the server keeps running when the browser tab closes). */
+function AppControls({ notify }: { notify: (m: string, k?: 'ok' | 'err') => void }) {
+  const [info, setInfo] = useState<{ bundled: boolean; loginItem: boolean } | null>(null);
+  useEffect(() => {
+    api.appInfo().then(setInfo).catch(() => setInfo(null));
+  }, []);
+  if (!info?.bundled) return null;
+  return (
+    <div className="settings-section">
+      <label className="toggle-row">
+        <input
+          type="checkbox"
+          checked={info.loginItem}
+          onChange={async (e) => {
+            try {
+              setInfo({ ...info, ...(await api.setLoginItem(e.target.checked)) });
+            } catch (err) {
+              notify((err as ApiError).message, 'err');
+            }
+          }}
+        />
+        <span>
+          <b>Start Agent Canvas when I log in</b>
+          <span className="field-hint">So schedules keep running after a restart. It runs in the background; open the app to see it.</span>
+        </span>
+      </label>
+      <button
+        className="btn sm danger"
+        onClick={async () => {
+          if (!confirm('Quit Agent Canvas? Schedules and file watches stop until you open it again.')) return;
+          await api.quit();
+          document.body.innerHTML = '<p style="font:15px system-ui;color:#e6ebf2;background:#0b0f16;margin:0;padding:40px;height:100vh">Agent Canvas has quit. Open it again from Applications.</p>';
+        }}
+      >
+        Quit Agent Canvas
+      </button>
+    </div>
+  );
+}
+
+function SettingsDialog({ onClose, notify, onSetup }: { onClose: () => void; notify: (m: string, k?: 'ok' | 'err') => void; onSetup: () => void }) {
   const [s, setS] = useState<Settings | null>(null);
   const [password, setPassword] = useState('');
   const [testTo, setTestTo] = useState('');
@@ -98,6 +136,22 @@ function SettingsDialog({ onClose, notify }: { onClose: () => void; notify: (m: 
     <div className="modal-back" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Settings">
         <h3>Settings</h3>
+        <label className="field">
+          <span className="field-label">Your email address</span>
+          <input type="email" value={s.userEmail ?? ''} placeholder="you@example.com" onChange={(e) => setS({ ...s, userEmail: e.target.value })} />
+          <span className="field-hint">Where “send it to me” emails go by default.</span>
+        </label>
+        <label className="toggle-row">
+          <input type="checkbox" checked={s.uiMode === 'advanced'} onChange={(e) => setS({ ...s, uiMode: e.target.checked ? 'advanced' : 'simple' })} />
+          <span>
+            <b>Advanced mode</b>
+            <span className="field-hint">Show every technical setting (tools, models, permissions, cron, JSON).</span>
+          </span>
+        </label>
+        <button className="btn sm" onClick={onSetup}>
+          Set up Claude again…
+        </button>
+        <AppControls notify={notify} />
         <label className="field">
           <span className="field-label">Max agents running at once</span>
           <input type="number" min={1} max={10} value={s.concurrency} onChange={(e) => setS({ ...s, concurrency: Number(e.target.value) })} />
@@ -234,6 +288,12 @@ export default function App() {
     }
   });
   const [insightsFor, setInsightsFor] = useState<string>();
+  const settingsState = useSettingsState();
+  const simple = settingsState.mode === 'simple';
+  const [showSetup, setShowSetup] = useState(false);
+  /** Bumped to focus the "describe it" box on the dashboard. */
+  const [describeNonce, setDescribeNonce] = useState(0);
+  const [wizard, setWizard] = useState<TemplateInfo | null>(null);
   useEffect(() => {
     try {
       localStorage.setItem('ac.view', view);
@@ -242,9 +302,27 @@ export default function App() {
     }
   }, [view]);
   const dirtyRef = useRef(false);
+
+  // First run: show setup until it's done or skipped.
+  useEffect(() => {
+    if (settingsState.loaded && !settingsState.setupDone) setShowSetup(true);
+  }, [settingsState.loaded, settingsState.setupDone]);
+
+  // Components deep in the tree (e.g. an error's "Open Plugins" button) ask to navigate.
+  useEffect(() => {
+    const on = (e: Event) => {
+      const to = (e as CustomEvent).detail;
+      if (to === 'plugins') setView('plugins');
+      else if (to === 'settings') setShowSettings(true);
+      else if (to === 'setup') setShowSetup(true);
+    };
+    window.addEventListener('ac:navigate', on);
+    return () => window.removeEventListener('ac:navigate', on);
+  }, []);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const notify = useCallback((msg: string, kind: 'ok' | 'err' = 'ok') => {
+  const notify = useCallback((raw: string, kind: 'ok' | 'err' = 'ok') => {
+    const msg = kind === 'err' ? (friendly(raw)?.text ?? raw) : raw;
     setToast({ msg, kind });
     setTimeout(() => setToast((t) => (t?.msg === msg ? null : t)), kind === 'err' ? 7000 : 3000);
   }, []);
@@ -356,7 +434,18 @@ export default function App() {
     open(wf.id);
   };
 
+  const onCreated = async (wf: WorkflowView) => {
+    setWizard(null);
+    await refreshList();
+    setView('workflows');
+    dirtyRef.current = false;
+    setCurrentId(wf.id);
+  };
+
   const createFromTemplate = async (key: string) => {
+    const t = templates.find((x) => x.key === key);
+    // Simple mode: a few plain questions instead of a canvas full of placeholders.
+    if (simple && t?.setup?.length) return setWizard(t);
     const wf = await api.fromTemplate(key);
     await refreshList();
     open(wf.id);
@@ -389,11 +478,19 @@ export default function App() {
           ))}
         </nav>
         <span className="spacer" />
+        <div className="seg mode-switch" role="radiogroup" aria-label="Interface">
+          <button role="radio" aria-checked={simple} className={simple ? 'on' : ''} onClick={() => void setMode('simple')} title="Plain language, only the settings most people need">
+            Simple
+          </button>
+          <button role="radio" aria-checked={!simple} className={!simple ? 'on' : ''} onClick={() => void setMode('advanced')} title="Every setting: tools, models, permissions, cron, JSON">
+            Advanced
+          </button>
+        </div>
         <UsageMeter usage={usage} queue={queue} />
         <button className={`btn sm inbox-btn ${inbox.length ? 'has' : ''}`} onClick={() => setShowInbox(!showInbox)} title="Reviews and questions waiting for you">
           Inbox{inbox.length ? <span className="count">{inbox.length}</span> : null}
         </button>
-        <ClaudeBadge status={claude} onRefresh={() => api.claude(true).then(setClaude)} />
+        <ClaudeBadge status={claude} onRefresh={() => api.claude(true).then(setClaude)} onSetup={() => setShowSetup(true)} />
         <button className="btn ghost sm" onClick={() => setShowSettings(true)}>
           Settings
         </button>
@@ -425,6 +522,8 @@ export default function App() {
             notify={notify}
             onOpenInbox={() => setShowInbox(true)}
             onWorkflowsChanged={() => void refreshList()}
+            describeNonce={describeNonce}
+            onCreated={(wf) => void onCreated(wf)}
           />
         </div>
       ) : (
@@ -503,6 +602,23 @@ export default function App() {
               />
             </ReactFlowProvider>
           ) : (
+            simple ? (
+              <div className="welcome simple-welcome">
+                <h1>Automate your work with Claude</h1>
+                <p className="muted">Describe what you want, or start from a ready-made automation. Everything runs on your own Claude plan, on this Mac.</p>
+                <Describe onCreated={(wf) => void onCreated(wf)} notify={notify} />
+                <h2 className="welcome-sub">Ready-made automations</h2>
+                <div className="ins-tpls">
+                  {templates.map((t) => (
+                    <button key={t.key} className="ins-tpl" onClick={() => void createFromTemplate(t.key)}>
+                      <span className={`tag tag-${t.pattern}`}>{PATTERN_LABEL[t.pattern]}</span>
+                      <b>{t.name}</b>
+                      <span>{t.description}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
             <div className="welcome">
               <h1>Build agents visually, run them on your Claude subscription</h1>
               <p className="muted">
@@ -540,6 +656,7 @@ export default function App() {
                 )}
               </div>
             </div>
+            )
           )}
         </main>
       </div>
@@ -571,7 +688,38 @@ export default function App() {
           </div>
         </aside>
       )}
-      {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} notify={notify} />}
+      {showSettings && (
+        <SettingsDialog
+          onClose={() => {
+            setShowSettings(false);
+            void loadMode();
+          }}
+          notify={notify}
+          onSetup={() => {
+            setShowSettings(false);
+            setShowSetup(true);
+          }}
+        />
+      )}
+      {wizard && <TemplateWizard template={wizard} onClose={() => setWizard(null)} onCreated={(wf) => void onCreated(wf)} notify={notify} />}
+      {showSetup && (
+        <Setup
+          claude={claude}
+          onClaude={setClaude}
+          onClose={() => {
+            setShowSetup(false);
+            void saveProfile({ setupDone: true });
+          }}
+          onDone={(how) => {
+            setShowSetup(false);
+            if (how === 'templates') setView('workflows');
+            else {
+              setView('dashboard');
+              if (how === 'describe') setDescribeNonce(Date.now());
+            }
+          }}
+        />
+      )}
       <FileViewer />
       {toast && (
         <div className={`toast ${toast.kind}`} role="status">

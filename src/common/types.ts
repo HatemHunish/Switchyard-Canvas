@@ -264,6 +264,8 @@ export interface ConditionData {
   question?: string;
   model?: string;
   cwd?: string;
+  /** Simple mode's rule builder state; `expression` is generated from it. */
+  rule?: { field: string; op: string; value: string };
 }
 
 export interface MergeData {
@@ -414,4 +416,17 @@ export interface UsageInfo {
   fiveHour?: { utilization: number; resetsAt: number };
   sevenDay?: { utilization: number; resetsAt: number };
   updatedAt: number;
+}
+
+/** A question asked before creating a workflow (template wizards, the "describe it" builder). */
+export interface SetupQuestion {
+  id: string;
+  label: string;
+  help?: string;
+  placeholder?: string;
+  type: 'text' | 'email' | 'folder' | 'list' | 'time' | 'number' | 'url';
+  default?: string;
+  required?: boolean;
+  /** Where the answer goes: a dot path inside a node's data ("config.query", "to", "cwd"; "@time" = a schedule's time of day). */
+  targets: Array<{ node: string; path: string; /** replace this text in the current value */ replace?: string; /** e.g. "\"{{value}}\" OR {{value}}.com" */ format?: string }>;
 }

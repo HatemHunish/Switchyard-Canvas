@@ -4,7 +4,7 @@ import type { Edge, Node } from '@xyflow/react';
 export const NODE_W = 240;
 export const NODE_H = 86;
 
-const isMemory = (n: Node) => (n.data as { kind?: string })?.kind === 'memory';
+const isMemory = (n: Node) => ['memory', 'dataset'].includes((n.data as { kind?: string })?.kind ?? '');
 
 /**
  * Left-to-right auto layout, the natural reading order for pipelines.
