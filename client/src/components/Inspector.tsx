@@ -8,7 +8,7 @@ import { NotifyEditor } from './NotifyEditor';
 import { RespondCard } from './RespondCard';
 import { RunOutput } from './RunOutput';
 import { DatasetFields, InsightFields, PluginToolsPicker, SourceFields } from './SourceInspector';
-import { CapabilityPicker, FolderPicker, QualityPicker, RuleBuilder, SchedulePicker } from './SimpleFields';
+import { CapabilityPicker, FolderPicker, ProviderPicker, QualityPicker, RuleBuilder, SchedulePicker } from './SimpleFields';
 import { useSimple } from '../lib/mode';
 
 interface Props {
@@ -236,9 +236,10 @@ export function Inspector({ node, workflowId, workflowName, webhookToken, saved,
               >
                 <textarea rows={6} value={d.prompt} onChange={set('prompt')} placeholder="What should this agent do?" />
               </Field>
+              {kind === 'agent' && !workerOf && <ProviderPicker provider={d.provider} onChange={(provider) => onChange({ provider })} />}
               {simple ? (
                 <>
-                  <QualityPicker model={d.model} onChange={(model) => onChange({ model })} />
+                  {d.provider !== 'codex' && <QualityPicker model={d.model} onChange={(model) => onChange({ model })} />}
                   <FolderPicker value={d.cwd} onChange={(cwd) => onChange({ cwd })} />
                   <CapabilityPicker tools={d.allowedTools ?? []} onChange={(allowedTools) => onChange({ allowedTools })} />
                 </>
@@ -248,8 +249,8 @@ export function Inspector({ node, workflowId, workflowName, webhookToken, saved,
                 <textarea rows={3} value={d.systemPrompt ?? ''} onChange={set('systemPrompt')} placeholder="You are a meticulous SRE…" />
               </Field>
               <div className="row2">
-                <Field label="Model">
-                  <input list="models" value={d.model} onChange={set('model')} />
+                <Field label="Model" hint={d.provider === 'codex' ? 'Empty or a Claude name = Codex’s default model.' : undefined}>
+                  <input list={d.provider === 'codex' ? undefined : 'models'} value={d.model} onChange={set('model')} placeholder={d.provider === 'codex' ? 'Codex default' : undefined} />
                   <datalist id="models">
                     {MODELS.map((m) => (
                       <option key={m} value={m} />

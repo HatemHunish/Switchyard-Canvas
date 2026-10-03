@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { homedir } from 'os';
 import { loadSettings, WORKSPACE_DIR } from '../common/paths';
 import { NodeKind, SetupQuestion, WfEdge, WfNode } from '../common/types';
-import { ClaudeCliService } from '../engine/claude-cli.service';
+import { AgentRunnerService } from '../engine/agent-runner.service';
 import { ProcessQueue } from '../engine/queue';
 import { PluginsService } from '../plugins/plugins.service';
 import { applyAnswers, dummyAnswers, ruleToExpression } from '../workflows/answers';
@@ -66,7 +66,7 @@ export class AssistantService {
   private readonly logger = new Logger(AssistantService.name);
 
   constructor(
-    private readonly cli: ClaudeCliService,
+    private readonly agents: AgentRunnerService,
     private readonly queue: ProcessQueue,
     private readonly plugins: PluginsService,
   ) {}
@@ -123,7 +123,7 @@ Text fields may use {{today}}, {{input}} (previous step's output), {{files}}, {{
 
   private async ask(prompt: string, resume?: string) {
     const res = await this.queue.run(
-      () => this.cli.run({ prompt, cwd: WORKSPACE_DIR, model: 'sonnet', tools: [], jsonSchema: SCHEMA, permissionMode: 'dontAsk', appendSystemPrompt: this.systemPrompt(), resumeSessionId: resume }),
+      () => this.agents.run({ prompt, cwd: WORKSPACE_DIR, model: 'sonnet', tools: [], jsonSchema: SCHEMA, permissionMode: 'dontAsk', appendSystemPrompt: this.systemPrompt(), resumeSessionId: resume }),
       () => undefined,
     );
     if (!res.ok) throw new BadRequestException(res.rateLimited ? 'Claude is at its usage limit right now. Try again after it resets.' : `Claude couldn’t build it: ${res.error ?? 'no answer'}`);

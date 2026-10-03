@@ -21,6 +21,8 @@ function appLauncher(): string | null {
   const launcher = resolve(dirname(process.execPath), '..', 'MacOS', 'Agent Canvas');
   return existsSync(launcher) ? launcher : null;
 }
+/** The Codex CLI that ships with @openai/codex-sdk (run through our own Node). */
+const codexCli = () => require.resolve('@openai/codex/bin/codex.js');
 const xml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 export interface ClaudeStatus {
@@ -32,11 +34,21 @@ export interface ClaudeStatus {
   error?: string;
 }
 
+export interface CodexStatus {
+  installed: boolean;
+  version?: string;
+  loggedIn?: boolean;
+  /** e.g. "Logged in using ChatGPT". */
+  detail?: string;
+  error?: string;
+}
+
 @Controller('api/system')
 export class SystemController {
   private cache: { at: number; status: ClaudeStatus } | null = null;
   /** The Claude Code installer or login started from the setup screen. */
-  private job: { kind: 'install' | 'login'; child: ChildProcess; log: string[]; exitCode: number | null; startedAt: number } | null = null;
+  private codexCache: { at: number; status: CodexStatus } | null = null;
+  private job: { kind: 'install' | 'login' | 'codex-login'; child: ChildProcess; log: string[]; exitCode: number | null; startedAt: number } | null = null;
 
   constructor(
     private readonly bus: EventBus,
@@ -69,7 +81,7 @@ export class SystemController {
   }
 
   /** Runs a setup step in the background; the setup screen polls /job for its output. */
-  private startJob(kind: 'install' | 'login', cmd: string, args: string[]) {
+  private startJob(kind: 'install' | 'login' | 'codex-login', cmd: string, args: string[]) {
     if (this.job && this.job.exitCode === null) throw new BadRequestException(`Already running: ${this.job.kind}`);
     const child = spawn(cmd, args, { env: { ...process.env, PATH: childPath() }, stdio: ['ignore', 'pipe', 'pipe'] });
     const job = { kind, child, log: [] as string[], exitCode: null as number | null, startedAt: Date.now() };
@@ -84,6 +96,7 @@ export class SystemController {
     child.on('exit', (code) => {
       job.exitCode = code ?? -1;
       this.cache = null;
+      this.codexCache = null;
     });
     // A login left open in the browser shouldn't hang around forever.
     setTimeout(() => job.exitCode === null && child.kill(), 15 * 60_000).unref();
@@ -102,6 +115,35 @@ export class SystemController {
   login(@Body() body: { email?: string }) {
     const email = String(body?.email ?? '').trim();
     return this.startJob('login', resolveClaude(loadSettings().claudeBin), ['auth', 'login', '--claudeai', ...(/^[^\s@]+@[^\s@]+$/.test(email) ? ['--email', email] : [])]);
+  }
+
+  /** Is Codex (bundled with the app) logged in? `codex login status` costs no tokens. */
+  @Get('codex')
+  async codex(@Query('refresh') refresh?: string): Promise<CodexStatus> {
+    if (!refresh && this.codexCache && Date.now() - this.codexCache.at < 60_000) return this.codexCache.status;
+    const env = { ...process.env, PATH: childPath() };
+    let status: CodexStatus;
+    try {
+      const cli = codexCli();
+      const { stdout: v } = await run(process.execPath, [cli, '--version'], { timeout: 15_000, env });
+      status = { installed: true, version: v.trim() };
+      try {
+        const { stdout, stderr } = await run(process.execPath, [cli, 'login', 'status'], { timeout: 15_000, env });
+        Object.assign(status, { loggedIn: true, detail: (stdout || stderr).trim() });
+      } catch (err: any) {
+        Object.assign(status, { loggedIn: false, detail: (err.stdout || err.stderr || '').toString().trim() || 'Not logged in' });
+      }
+    } catch (err: any) {
+      status = { installed: false, error: err.message };
+    }
+    this.codexCache = { at: Date.now(), status };
+    return status;
+  }
+
+  /** Opens the browser to sign in to ChatGPT for Codex (Codex stores the login; this app never sees it). */
+  @Post('codex/login')
+  codexLogin() {
+    return this.startJob('codex-login', process.execPath, [codexCli(), 'login']);
   }
 
   @Get('claude/job')

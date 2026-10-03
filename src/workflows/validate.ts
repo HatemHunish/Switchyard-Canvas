@@ -115,6 +115,9 @@ export function validateWorkflow(wf: Workflow): ValidationIssue[] {
         if (!d.prompt?.trim()) issues.push({ nodeId: n.id, message: `Orchestrator "${d.name || n.id}" needs a task prompt.` });
         if (!d.cwd?.trim()) issues.push({ nodeId: n.id, message: `Orchestrator "${d.name || n.id}" needs a working directory.` });
         const team = wf.edges.filter((e) => e.source === n.id && isTeam(e)).map((e) => byId.get(e.target)).filter((t) => t?.kind === 'agent');
+        // Teams run as Claude subagents; Codex has no subagents.
+        if (d.provider === 'codex') issues.push({ nodeId: n.id, message: `Orchestrator "${d.name || n.id}" must use Claude: Codex can't delegate to a team.` });
+        for (const t of team) if (t!.data?.provider === 'codex') issues.push({ nodeId: t!.id, message: `"${t!.data?.name}" is on a team, so it runs as a Claude subagent: switch it to Claude.` });
         if (!team.length) issues.push({ nodeId: n.id, message: `Orchestrator "${d.name || n.id}" has no team: drag from its team handle to one or more agents.` });
         const keys = team.map((t) => String(t!.data?.name ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-'));
         if (new Set(keys).size < keys.length) issues.push({ nodeId: n.id, message: 'Team members need distinct names.' });

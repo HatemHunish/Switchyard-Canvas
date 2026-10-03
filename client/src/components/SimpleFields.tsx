@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { api } from '../api';
+import { useEffect, useState } from 'react';
+import { api, type CodexStatus } from '../api';
+import type { AgentProvider } from '../types';
 import { tildify, useSettingsState } from '../lib/mode';
 import {
   CAPABILITIES,
@@ -18,6 +19,74 @@ import {
   type Rule,
   type Schedule,
 } from '../lib/plain';
+
+/** Which AI runs this agent. Codex shows whether it's signed in, with a button to sign in to ChatGPT. */
+export function ProviderPicker({ provider, onChange }: { provider?: AgentProvider; onChange: (provider: AgentProvider) => void }) {
+  const current = provider ?? 'claude';
+  const [codex, setCodex] = useState<CodexStatus | null>(null);
+  const [signingIn, setSigningIn] = useState(false);
+  useEffect(() => {
+    if (current !== 'codex') return;
+    let alive = true;
+    const check = (refresh = false) => api.codex(refresh).then((s) => alive && setCodex(s)).catch(() => {});
+    void check();
+    // While a sign-in is open in the browser, poll until it lands.
+    const timer = signingIn ? setInterval(() => void check(true), 3000) : undefined;
+    return () => {
+      alive = false;
+      if (timer) clearInterval(timer);
+    };
+  }, [current, signingIn]);
+  useEffect(() => {
+    if (codex?.loggedIn) setSigningIn(false);
+  }, [codex?.loggedIn]);
+  const signIn = async () => {
+    setSigningIn(true);
+    try {
+      await api.loginCodex();
+    } catch (err) {
+      setSigningIn(false);
+      alert((err as Error).message);
+    }
+  };
+  return (
+    <div className="field">
+      <span className="field-label">AI</span>
+      <div className="seg" role="radiogroup" aria-label="AI">
+        {(
+          [
+            ['claude', 'Claude'],
+            ['codex', 'OpenAI Codex'],
+          ] as const
+        ).map(([value, label]) => (
+          <button key={value} type="button" role="radio" aria-checked={current === value} className={current === value ? 'on' : ''} onClick={() => onChange(value)}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {current === 'codex' && (
+        <span className="field-hint">
+          {!codex
+            ? 'Checking Codex…'
+            : !codex.installed
+              ? `Codex isn’t available: ${codex.error ?? 'unknown error'}`
+              : codex.loggedIn
+                ? `${codex.detail || 'Signed in'}. Runs on your ChatGPT plan or OpenAI key.`
+                : signingIn
+                  ? 'Finish signing in in your browser…'
+                  : (
+                    <>
+                      Codex isn’t signed in.{' '}
+                      <button type="button" className="btn sm" onClick={() => void signIn()}>
+                        Sign in with ChatGPT
+                      </button>
+                    </>
+                  )}
+        </span>
+      )}
+    </div>
+  );
+}
 
 /** "What can it use?" as checkboxes instead of tool names. */
 export function CapabilityPicker({ tools, onChange }: { tools: string[]; onChange: (tools: string[]) => void }) {

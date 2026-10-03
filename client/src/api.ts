@@ -147,6 +147,14 @@ export interface ClaudeStatus {
   error?: string;
 }
 
+export interface CodexStatus {
+  installed: boolean;
+  version?: string;
+  loggedIn?: boolean;
+  detail?: string;
+  error?: string;
+}
+
 export interface Settings {
   concurrency: number;
   claudeBin: string;
@@ -166,7 +174,7 @@ export interface Settings {
 }
 
 export interface SetupJob {
-  kind: 'install' | 'login' | null;
+  kind: 'install' | 'login' | 'codex-login' | null;
   log?: string[];
   running?: boolean;
   exitCode?: number | null;
@@ -331,6 +339,8 @@ export const api = {
   settings: () => req<Settings>('GET', '/api/system/settings'),
   installClaude: () => req<{ started: boolean }>('POST', '/api/system/claude/install'),
   loginClaude: (email?: string) => req<{ started: boolean }>('POST', '/api/system/claude/login', { email }),
+  codex: (refresh = false) => req<CodexStatus>('GET', `/api/system/codex${refresh ? '?refresh=1' : ''}`),
+  loginCodex: () => req<{ started: boolean }>('POST', '/api/system/codex/login'),
   setupJob: () => req<SetupJob>('GET', '/api/system/claude/job'),
   cancelSetupJob: () => req<{ cancelled: boolean }>('POST', '/api/system/claude/job/cancel'),
   chooseFolder: (prompt?: string) => req<{ path: string | null }>('POST', '/api/system/choose-folder', { prompt }),

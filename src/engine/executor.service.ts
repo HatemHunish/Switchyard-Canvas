@@ -11,7 +11,7 @@ import { ActionsService, freePath, safeName } from '../actions/actions.service';
 import { MemoryService, storeIdFor } from '../memory/memory.service';
 import { convert, EXT } from '../output/convert';
 import { validateWorkflow } from '../workflows/validate';
-import { ClaudeCliService, CliResult, CliRunOptions, eventsFromMessage, toolResultText } from './claude-cli.service';
+import { AgentResult, AgentRunnerService, AgentRunOptions, eventsFromMessage, toolResultText } from './agent-runner.service';
 import { EventBus } from './event-bus';
 import { InboxService, RequestClosedError } from './inbox.service';
 import { ProcessQueue } from './queue';
@@ -148,7 +148,7 @@ export class ExecutorService {
   private readonly active = new Map<string, ActiveRun>();
 
   constructor(
-    private readonly cli: ClaudeCliService,
+    private readonly agents: AgentRunnerService,
     private readonly queue: ProcessQueue,
     private readonly store: RunsStore,
     private readonly bus: EventBus,
@@ -483,7 +483,7 @@ export class ExecutorService {
     onEvent: (e: NodeEvent) => void,
     setStatus: (nr: NodeRun, s: NodeStatus) => void,
     h: RunHelpers,
-  ): CliRunOptions {
+  ): AgentRunOptions {
     const d = node.data as OrchestratorData;
     const team = wf.edges
       .filter((e) => e.source === node.id && isTeamEdge(e))
@@ -578,9 +578,10 @@ export class ExecutorService {
     return opts;
   }
 
-  private agentOptions(d: AgentData, prompt: string, stores: Array<{ id: string; data: MemoryData }> = [], run?: Run, sets: Array<{ id: string; name: string }> = []): CliRunOptions {
+  private agentOptions(d: AgentData, prompt: string, stores: Array<{ id: string; data: MemoryData }> = [], run?: Run, sets: Array<{ id: string; name: string }> = []): AgentRunOptions {
     const memoryContext = stores.length ? this.memory.contextFor(stores, prompt) : '';
     return {
+      provider: d.provider,
       datasets: sets.map((s) => s.id),
       pluginTools: this.plugins.toolDefs(d.pluginTools ?? []),
       prompt,
@@ -597,18 +598,18 @@ export class ExecutorService {
     };
   }
 
-  /** One `claude -p` call through the shared queue, with a single retry on rate limits. */
-  private async callClaude(nr: NodeRun, run: Run, opts: CliRunOptions, signal: AbortSignal, setStatus: (nr: NodeRun, s: NodeStatus) => void, onEvent: (e: NodeEvent) => void) {
+  /** One agent turn (Claude or Codex) through the shared queue, with a single retry on rate limits. */
+  private async callClaude(nr: NodeRun, run: Run, opts: AgentRunOptions, signal: AbortSignal, setStatus: (nr: NodeRun, s: NodeStatus) => void, onEvent: (e: NodeEvent) => void) {
     if (!existsSync(opts.cwd)) throw new Error(`Working directory does not exist: ${opts.cwd}`);
     const exec = () =>
       this.queue.run(
         () => {
           setStatus(nr, 'running');
-          return this.cli.run({ ...opts, signal, onEvent });
+          return this.agents.run({ ...opts, signal, onEvent });
         },
         () => setStatus(nr, 'queued'),
       );
-    let res: CliResult = await exec();
+    let res: AgentResult = await exec();
     if (!res.ok && res.rateLimited && !signal.aborted) {
       const wait = loadSettings().rateLimitRetryMs;
       onEvent({ t: 'info', text: `Rate limited — retrying once in ${Math.round(wait / 1000)}s`, at: Date.now() });
@@ -630,12 +631,12 @@ export class ExecutorService {
     node: WfNode,
     nr: NodeRun,
     run: Run,
-    opts: CliRunOptions,
+    opts: AgentRunOptions,
     signal: AbortSignal,
     setStatus: (nr: NodeRun, s: NodeStatus) => void,
     onEvent: (e: NodeEvent) => void,
     stores: Array<{ id: string; data: MemoryData }> = [],
-  ): Promise<CliResult> {
+  ): Promise<AgentResult> {
     const d = node.data as AgentData;
     let res = await this.callClaude(nr, run, opts, signal, setStatus, onEvent);
     const max = Math.max(1, Number(d.maxQuestions) || 3);
@@ -949,12 +950,12 @@ ${input || '(empty)'}`;
         throw new Error(`This version can't run "${node.kind}" steps. Check the node type or update the app.`);
       }
 
-      // Agent node, or an LLM-judged condition: both are `claude -p` runs.
-      let res: CliResult;
+      // Agent node, or an LLM-judged condition: both are agent runs.
+      let res: AgentResult;
       if (node.kind === 'condition') {
         const prompt = `Answer this yes/no question about the input below.\n\nQuestion: ${renderTemplate(node.data.question, ctx)}\n\n## Input\n${input || '(empty)'}`;
         nr.prompt = prompt;
-        const opts: CliRunOptions = {
+        const opts: AgentRunOptions = {
           prompt,
           cwd: node.data.cwd?.trim() ? expandHome(node.data.cwd.trim()) : DATA_DIR,
           model: node.data.model || 'haiku',

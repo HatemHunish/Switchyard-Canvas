@@ -33,7 +33,7 @@ export const appBase = () => (loadSettings().publicUrl?.trim() || runtime.apiBas
 
 /**
  * Requests for a human: reviews/approvals and questions from agents.
- * A run waiting here holds no `claude` process and no queue slot. Waiting is
+ * A run waiting here holds no agent process and no queue slot. Waiting is
  * in memory, so restarting the app cancels runs that are waiting.
  */
 @Injectable()

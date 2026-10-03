@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { loadSettings } from '../common/paths';
 
 /**
- * Global semaphore for `claude` processes. Every run shares the user's
+ * Global semaphore for agent processes. Every run shares the user's
  * subscription limits, so we cap how many agents run at the same time.
  */
 @Injectable()

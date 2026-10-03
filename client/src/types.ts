@@ -15,8 +15,12 @@ export type PermissionMode =
   | 'plan'
   | 'bypassPermissions';
 
+export type AgentProvider = 'claude' | 'codex';
+
 export interface AgentData {
   name: string;
+  /** Agent runtime: Claude (Agent SDK) or OpenAI Codex. Default 'claude'. */
+  provider?: AgentProvider;
   description?: string;
   /** Task prompt; supports {{input}}, {{trigger.payload}}, {{nodes.<id>.output}}, {{date}}. */
   prompt: string;

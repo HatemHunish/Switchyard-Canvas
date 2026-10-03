@@ -1,5 +1,5 @@
 /**
- * Stdio MCP server started inside each agent's `claude` process. It exposes
+ * Stdio MCP server started inside each agent's process (Claude or Codex). It exposes
  * only the tools that agent is wired to on the canvas:
  *
  *  - ask_user       acknowledges only; the app sees the call in the CLI stream,
@@ -10,7 +10,7 @@
  *  - plugin tools   whatever the agent's selected plugins provide (schemas in AC_EXTRA_TOOLS).
  *
  * Memory calls go back to the app's API with a per-process secret.
- * Config comes from env vars set by ClaudeCliService.
+ * Config comes from env vars set by AgentRunnerService (both providers).
  */
 import { createInterface } from 'readline';
 

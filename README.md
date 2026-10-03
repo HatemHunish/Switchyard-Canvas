@@ -2,7 +2,7 @@
 
 Build Claude agents visually and run them on your **Claude subscription**: monitors on a schedule, agents triggered by files or webhooks, multi-step pipelines, and media trackers that collect posts, news, reviews and trends into datasets with insights.
 
-Every agent step runs through the **Claude Code CLI installed on your machine** (`claude -p`), using the account you logged into yourself. The app never asks for, stores or sees credentials, and it doesn't need an API key.
+Every agent step runs on the **Claude Agent SDK** or, per agent, **OpenAI Codex** (Codex SDK), using the account you logged into yourself: your Claude login (`claude auth login`) and, for Codex, `codex login` (ChatGPT plan or OpenAI key). The app never asks for, stores or sees credentials. Orchestrators and their team members always use Claude, since Codex has no subagents.
 
 ## For everyone: no terminal, no jargon
 
@@ -39,6 +39,8 @@ Mac app: `npm run package:mac` builds `release/Agent Canvas.app` and `release/Ag
 
 Environment variables: `PORT` (default 3002), `HOST` (default `127.0.0.1`), `AGENT_CANVAS_HOME` (data folder, default `~/.agent-canvas`), `CLAUDE_BIN`.
 
+Other websites open in your browser can't drive the app: changes are only accepted from the app's own page, and only these hostnames are served (against DNS rebinding): `localhost`, IP addresses, `*.local`, the Public URL's host, and any listed in `AGENT_CANVAS_ALLOWED_HOSTS` (comma-separated). Webhooks and review links check their own tokens and work from any host.
+
 ## Dashboard
 
 The app opens on the **Dashboard**; the canvas is under **Workflows**.
@@ -61,7 +63,7 @@ Everything updates live. Charts follow the bundled dataviz guidance. Completed r
 | **Schedule** | Every N minutes, or on a cron schedule. Use it for monitors. A tick is skipped if the previous run is still going |
 | **File watch** | Starts when files are added, changed or deleted (path or glob, debounced) |
 | **Webhook** | `POST /api/hooks/<workflow>/<node>` with a token; the JSON body becomes `{{trigger.payload}}` |
-| **Agent** | One `claude -p` run with its own prompt, persona, model, tools, permission mode and working directory. It can be forced to return JSON (JSON Schema) |
+| **Agent** | One agent turn (Claude or Codex) with its own prompt, persona, model, tools, permission mode and working directory. It can be forced to return JSON (JSON Schema) |
 | **Orchestrator** | An agent that coordinates a **team**. Drag from its green *team* handle to agents to make them team members. Given a task, it decides which members to use, briefs them, runs independent sub-tasks in parallel, checks their work and combines the results. Members run as Claude Code subagents inside the orchestrator's session (one process, one queue slot); each member's node lights up with its own activity and result |
 | **Output file** | Turns the result into **PDF, PowerPoint, Word, Excel, HTML, Markdown, CSV, JSON or text**. *Quick convert* builds it locally from the Markdown in under a second, at no usage cost, with right-to-left support. *Designed by Claude* lets an agent build it with its own tools and skills (charts, themes); it's slower and uses your Claude usage. Files go to `~/.agent-canvas/outputs/<workflow>/` by default and flow on to later steps |
 | **Actions** | *Save to folder*, *Send email* (macOS Mail app, as a draft or sent, or SMTP), *Slack / Teams / Webhook* (POST), *Notify me*, *Open file*. Actions receive the files from earlier Output nodes (e.g. email attachments) and pass the result on, so they can be chained |
@@ -91,7 +93,7 @@ Schedule, file and webhook triggers only fire while the workflow is **Enabled** 
 - **Agents can ask you questions.** Turn on *Can ask me questions* on an agent. It gets an `ask_user` tool from a small MCP server bundled with the app (`src/mcp/ask-server.ts`). When it calls the tool, its turn ends, the run pauses, and your answer resumes **the same Claude session** (`--resume`), so it keeps all its context.
 - **Reviews** come from the Human review node (see above).
 - Anything waiting shows in the **Inbox** (top bar), on the canvas (pulsing node plus a "Waiting for you" banner), in the tab title, and as a macOS notification (Settings).
-- A waiting run holds no `claude` process and no queue slot. It can wait for hours, but **restarting the app cancels runs that are waiting**.
+- A waiting run holds no agent process and no queue slot. It can wait for hours, but **restarting the app cancels runs that are waiting**.
 - Schedule ticks are skipped while that trigger's previous run is still waiting on you, so monitors don't pile up.
 - **Notify the reviewer** (on Human review nodes, and "Notify when it asks" on agents that can ask): email (Mail app or SMTP), Slack, Teams, any webhook (JSON with the request and links), or a desktop notification, with optional reminders every N minutes up to M times. Each message has the content, a **Review now** link (a small page to approve, send back or answer, including from a phone if it can reach the app) and an **Open in Agent Canvas** link. Delivery results show in the step's activity. **Send test** checks your channels.
 - Review links are single-use secrets per request. Opening a link only shows the form, so mail/chat link previews can't approve anything. Links point to this Mac unless you set **Settings → Public URL** (e.g. your Mac's LAN address with `HOST=0.0.0.0`, or a private tunnel).

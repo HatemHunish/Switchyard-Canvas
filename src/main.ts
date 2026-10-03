@@ -4,12 +4,15 @@ import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { DATA_DIR } from './common/paths';
+import { requestGuard } from './common/request-guard';
 import { runtime } from './common/runtime';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.enableShutdownHooks();
+  // Before every route: other websites in the browser must not drive this API.
+  app.use(requestGuard);
   app.useBodyParser('json', { limit: '5mb' });
 
   const port = process.env.PORT ? Number(process.env.PORT) : 3002;

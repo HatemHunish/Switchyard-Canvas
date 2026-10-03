@@ -17,9 +17,9 @@ mkdirSync(PLUGINS_DIR, { recursive: true });
 mkdirSync(WORKSPACE_DIR, { recursive: true });
 
 export interface Settings {
-  /** Max `claude` processes running at once (they share one subscription). */
+  /** Max agent processes running at once (they share one subscription). */
   concurrency: number;
-  /** Path/name of the Claude Code CLI binary. */
+  /** Path/name of the Claude Code CLI, used for setup (install/login status); runs use the Agent SDK. */
   claudeBin: string;
   /** Retry once after this delay when a run hits a rate limit. */
   rateLimitRetryMs: number;
