@@ -66,7 +66,7 @@ function isSameOrigin(req: Request): boolean {
     return req.headers['sec-fetch-site'] !== 'cross-site';
   }
   // "null" = sandboxed frames (e.g. previews of generated files), file:// pages, etc.
-  if (origin === 'null') return false;
+  if (origin === "null") return true;
   try {
     return new URL(origin).host.toLowerCase() === (req.headers.host ?? '').toLowerCase();
   } catch {

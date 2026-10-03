@@ -4,6 +4,21 @@ Build Claude agents visually and run them on your **Claude subscription**: monit
 
 Every agent step runs on the **Claude Agent SDK** or, per agent, **OpenAI Codex** (Codex SDK), using the account you logged into yourself: your Claude login (`claude auth login`) and, for Codex, `codex login` (ChatGPT plan or OpenAI key). The app never asks for, stores or sees credentials. Orchestrators and their team members always use Claude, since Codex has no subagents.
 
+## Screenshots
+
+![Dashboard: describe an automation, live runs, upcoming schedules, subscription usage and latest files](docs/screenshots/dashboard.png)
+
+| | |
+|---|---|
+| ![Orchestrator workflow on the canvas](docs/screenshots/canvas-orchestrator.png) | ![Source pipeline on the canvas](docs/screenshots/canvas-sources.png) |
+| **Orchestrator and team.** A team lead delegates to researcher, analyst and writer agents, then waits for your approval. | **Sources and insights.** Reddit, Hacker News and news mentions are merged, labelled and checked; you're alerted on spikes. |
+| ![Agent settings with the Claude / OpenAI Codex picker](docs/screenshots/agent-ai-picker.png) | ![Steps view of a workflow](docs/screenshots/steps-view.png) |
+| **Pick the AI per agent.** Claude (Agent SDK) or OpenAI Codex, with the Codex sign-in status shown inline. | **Steps view.** The same workflow as a numbered list, for people who'd rather not use the canvas. |
+| ![Insights for a dataset](docs/screenshots/insights.png) | ![Plugins page](docs/screenshots/plugins.png) |
+| **Insights.** Items per day, sentiment, topics and the most active sources for a dataset. | **Plugins.** Sources and tools, with keys stored in the macOS Keychain and a connection test. |
+| ![Dashboard in Simple mode](docs/screenshots/dashboard-simple.png) | |
+| **Simple mode.** Plain language and fewer settings; switch to Advanced in the top bar. | |
+
 ## For everyone: no terminal, no jargon
 
 - **Mac app:** `npm run package:mac` builds `release/Agent Canvas.app` and a `.dmg`, with Node bundled inside. Drag it to Applications and double-click; it starts in the background and opens in your browser. It isn't signed yet, so the first time, right-click → **Open** → **Open**. Settings → **Start Agent Canvas when I log in** keeps schedules running after a restart; **Quit Agent Canvas** stops it. Logs go to `~/Library/Logs/Agent Canvas.log`. The app works on the same kind of Mac (Apple silicon or Intel) it was built on.

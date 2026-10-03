@@ -7,7 +7,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://127.0.0.1:3002',
+      // Keep the browser's Host: the server only accepts changes whose Origin matches it
+      // (the string shorthand would rewrite Host to 127.0.0.1:3002).
+      '/api': { target: 'http://127.0.0.1:3002', changeOrigin: false },
     },
   },
   build: {
