@@ -242,9 +242,31 @@ function SettingsDialog({ onClose, notify, onSetup }: { onClose: () => void; not
             </button>
           </div>
         </div>
+        <div className="row2">
+          <label className="field">
+            <span className="field-label">Max turns per AI step</span>
+            <input type="number" min={1} value={s.maxTurns} onChange={(e) => setS({ ...s, maxTurns: Number(e.target.value) })} />
+          </label>
+          <label className="field">
+            <span className="field-label">Max spend per AI step ($, 0 = no limit)</span>
+            <input type="number" min={0} step={0.5} value={s.maxBudgetUsd} onChange={(e) => setS({ ...s, maxBudgetUsd: Number(e.target.value) })} />
+          </label>
+        </div>
+        <span className="field-hint">Defaults for steps that don't set their own. A step that reaches a limit stops and says which one. Spend is Claude Code's estimate.</span>
+        <div className="row2">
+          <label className="field">
+            <span className="field-label">Retries after a usage limit</span>
+            <input type="number" min={0} max={10} value={s.rateLimitRetries} onChange={(e) => setS({ ...s, rateLimitRetries: Number(e.target.value) })} />
+          </label>
+          <label className="field">
+            <span className="field-label">First retry after (seconds)</span>
+            <input type="number" min={0} value={Math.round(s.rateLimitRetryMs / 1000)} onChange={(e) => setS({ ...s, rateLimitRetryMs: Number(e.target.value) * 1000 })} />
+          </label>
+        </div>
         <label className="field">
-          <span className="field-label">Retry after rate limit (seconds)</span>
-          <input type="number" min={0} value={Math.round(s.rateLimitRetryMs / 1000)} onChange={(e) => setS({ ...s, rateLimitRetryMs: Number(e.target.value) * 1000 })} />
+          <span className="field-label">Wait for a usage-limit reset up to (minutes)</span>
+          <input type="number" min={0} value={Math.round(s.rateLimitMaxWaitMs / 60000)} onChange={(e) => setS({ ...s, rateLimitMaxWaitMs: Number(e.target.value) * 60000 })} />
+          <span className="field-hint">When Claude reports when the limit resets and that's sooner than this, the step waits and retries; otherwise it fails and tells you the reset time.</span>
         </label>
         <div className="modal-actions">
           <button className="btn ghost" onClick={onClose}>

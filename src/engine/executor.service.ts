@@ -11,10 +11,12 @@ import { ActionsService, freePath, safeName } from '../actions/actions.service';
 import { MemoryService, storeIdFor } from '../memory/memory.service';
 import { convert, EXT } from '../output/convert';
 import { validateWorkflow } from '../workflows/validate';
-import { AgentResult, AgentRunnerService, AgentRunOptions, eventsFromMessage, toolResultText } from './agent-runner.service';
+import { AgentResult, AgentRunnerService, AgentRunOptions, clip, eventsFromMessage, toolResultText, WorkerDef } from './agent-runner.service';
+import { fence, readsOutside, UNTRUSTED_NOTE, workerServerName } from './app-tools';
 import { EventBus } from './event-bus';
 import { InboxService, RequestClosedError } from './inbox.service';
 import { ProcessQueue } from './queue';
+import { rateLimitDecision, sleep } from './retry';
 import { RunsStore } from './runs.store';
 import { renderTemplate } from './template';
 
@@ -27,6 +29,20 @@ const JUDGE_SCHEMA = JSON.stringify({
 const QUESTION_MARKER = 'QUESTION FOR USER:';
 // Headless runs look conversational to the model, so it must be told plainly that text replies reach nobody.
 const ASK_PROTOCOL = `You are running unattended inside an automated workflow. No human reads your text replies until the whole task is finished, so a question written in your reply will never be answered. The ONLY way to reach the user is the mcp__agent_canvas__ask_user tool: if you need information or a decision only the user can give, call it with one clear question and then end your turn. Otherwise complete the task without asking.`;
+
+/** Node kinds whose output can contain text from outside the user's control. */
+const OUTSIDE_KINDS = new Set(['source', 'insight', 'trigger.webhook']);
+
+/** Template paths that carry step output or trigger payloads (and so can carry outside content). */
+const DATA_PATH = /^(input|inputs|nodes|trigger\.payload)\b/;
+
+/** "Bash(git:*)" → "Bash". */
+const toolBase = (rule: string) => rule.split('(')[0].trim();
+
+/** Short system prompt for one-off calls without tools (labelling, judging): Claude Code's own prompt is for agents. */
+const ONE_OFF_PROMPT = 'You are a precise assistant inside an automation app. Do exactly the task in the message and reply only through the structured output.';
+/** Labelling and judging need one turn for the answer and one for the structured output; a little slack covers retries. */
+const ONE_OFF_TURNS = 4;
 
 /** Fallback for agents that ask in plain text instead of calling ask_user. */
 function extractQuestion(text: string): string | null {
@@ -166,6 +182,24 @@ export class ExecutorService {
       .map((e) => wf.nodes.find((n) => n.id === e.source))
       .filter((n): n is WfNode => n?.kind === 'dataset' && !!n.data?.name?.trim())
       .map((n) => ({ id: datasetIdFor(n.data.name), name: n.data.name.trim() }));
+  }
+
+  /** True when content from outside the user's control (a source, insight or webhook) flows into this node. */
+  hasOutsideInput(wf: Workflow, nodeId: string): boolean {
+    const flow = wf.edges.filter((e) => !isLoopEdge(e) && !isTeamEdge(e));
+    const kinds = new Map(wf.nodes.map((n) => [n.id, n.kind as string]));
+    const seen = new Set<string>();
+    const todo = [nodeId];
+    while (todo.length) {
+      const cur = todo.pop()!;
+      for (const e of flow) {
+        if (e.target !== cur || seen.has(e.source)) continue;
+        if (OUTSIDE_KINDS.has(kinds.get(e.source) ?? '')) return true;
+        seen.add(e.source);
+        todo.push(e.source);
+      }
+    }
+    return false;
   }
 
   /** Tells the agent what its datasets hold, so it knows the tools are worth calling. */
@@ -350,8 +384,8 @@ export class ExecutorService {
       const stores = this.memoryFor(wf, anode, run, emit);
       const base =
         anode.kind === 'orchestrator'
-          ? this.orchestratorOptions(wf, anode, prompt, stores, run, emit, setStatus, helpers)
-          : this.agentOptions(anode.data as AgentData, prompt, stores, run, this.datasetsFor(wf, anode));
+          ? this.orchestratorOptions(wf, anode, prompt, stores, run, emit, setStatus, helpers, this.hasOutsideInput(wf, agentId))
+          : this.agentOptions(anode.data as AgentData, prompt, stores, run, this.datasetsFor(wf, anode), this.hasOutsideInput(wf, agentId));
       const res = await this.agentTurn(wf, anode, anr, run, { ...base, resumeSessionId: anr.sessionId }, signal, setStatus, emit, stores);
       if (!res.ok) {
         anr.error = res.error;
@@ -470,9 +504,11 @@ export class ExecutorService {
   }
 
   /**
-   * Orchestrator = an agent whose team members are Claude Code subagents
-   * (`--agents`). It decides who to delegate to; each delegation lights up
-   * that worker's node, streams its activity there, and records its result.
+   * Orchestrator = an agent whose team members are Claude Code subagents.
+   * Each member gets its own tool server (its own memory, datasets and plugin
+   * tools only). SubagentStart/SubagentStop hooks light up the member's node
+   * and record its result; a PreToolUse hook keeps the orchestrator itself
+   * from using tools that only its members are meant to have.
    */
   private orchestratorOptions(
     wf: Workflow,
@@ -483,42 +519,46 @@ export class ExecutorService {
     onEvent: (e: NodeEvent) => void,
     setStatus: (nr: NodeRun, s: NodeStatus) => void,
     h: RunHelpers,
+    untrusted = false,
   ): AgentRunOptions {
     const d = node.data as OrchestratorData;
+    const settings = loadSettings();
     const team = wf.edges
       .filter((e) => e.source === node.id && isTeamEdge(e))
       .map((e) => wf.nodes.find((n) => n.id === e.target))
       .filter((n): n is WfNode => n?.kind === 'agent')
       .map((n) => ({ node: n, key: workerKey(n.data.name), stores: this.memoryFor(wf, n, run, onEvent), sets: this.datasetsFor(wf, n) }));
 
-    // One MCP tool server serves the orchestrator and its workers, so it gets every store any of them uses.
-    const allStores = [...ownStores, ...team.flatMap((w) => w.stores)].filter((s, i, a) => a.findIndex((x) => x.id === s.id) === i);
-    const ownSets = this.datasetsFor(wf, node);
-    const allSets = [...ownSets, ...team.flatMap((w) => w.sets)].filter((s, i, a) => a.findIndex((x) => x.id === s.id) === i);
-    const opts = this.agentOptions(d, prompt, allStores, run, allSets);
-    opts.pluginTools = this.plugins.toolDefs([...new Set([...(d.pluginTools ?? []), ...team.flatMap((w) => w.node.data.pluginTools ?? [])])]);
-    // The orchestrator's own context should only describe its own memory.
-    opts.appendSystemPrompt = [d.systemPrompt?.trim(), ownStores.length ? this.memory.contextFor(ownStores, prompt) : '', this.datasetContext(ownSets), d.canAsk ? ASK_PROTOCOL : ''].filter(Boolean).join('\n\n');
+    // The orchestrator's own tools and context describe only its own memory and datasets.
+    const opts = this.agentOptions(d, prompt, ownStores, run, this.datasetsFor(wf, node), untrusted);
 
-    opts.agents = {};
+    const agents: Record<string, WorkerDef> = {};
     for (const w of team) {
       const wd = w.node.data as AgentData;
-      const memTools = [
-        ...(w.stores.length ? ['mcp__agent_canvas__memory_search', ...(w.stores.some((s) => s.data.allowWrite) ? ['mcp__agent_canvas__memory_save'] : [])] : []),
-        ...(w.sets.length ? ['dataset_search', 'dataset_stats', 'dataset_top'].map((t) => `mcp__agent_canvas__${t}`) : []),
-        ...(wd.pluginTools ?? []).map((t) => `mcp__agent_canvas__${t}`),
-      ];
-      opts.agents[w.key] = {
+      agents[w.key] = {
         description: wd.description?.trim() || wd.name,
         prompt:
-          [wd.systemPrompt?.trim(), wd.prompt?.trim() && `## Your standing instructions\n${wd.prompt.trim()}`, w.stores.length ? this.memory.contextFor(w.stores, wd.prompt ?? '') : '', this.datasetContext(w.sets)]
+          [
+            wd.systemPrompt?.trim(),
+            wd.prompt?.trim() && `## Your standing instructions\n${wd.prompt.trim()}`,
+            w.stores.length ? this.memory.contextFor(w.stores, wd.prompt ?? '') : '',
+            this.datasetContext(w.sets),
+            untrusted || w.sets.length || wd.pluginTools?.length ? UNTRUSTED_NOTE : '',
+          ]
             .filter(Boolean)
             .join('\n\n') || `You are ${wd.name}.`,
-        tools: [...(wd.allowedTools ?? []), ...memTools],
+        tools: wd.allowedTools ?? [],
         model: wd.model || undefined,
+        maxTurns: Number(wd.maxTurns) || settings.maxTurns,
+        appTools: {
+          memory: w.stores.length ? { search: w.stores.map((s) => s.id), write: w.stores.find((s) => s.data.allowWrite)?.id, runId: run.id } : undefined,
+          datasets: w.sets.map((s) => s.id),
+          pluginTools: this.plugins.toolDefs(wd.pluginTools ?? []),
+        },
       };
     }
-    // Permissions are per session, so workers' tools must be allowed too (headless runs deny anything else).
+    opts.agents = agents;
+    // Permissions are per session, so members' tools must be allowed too (headless runs deny anything else).
     opts.allowedTools = [...new Set([...(d.allowedTools ?? []), ...team.flatMap((w) => w.node.data.allowedTools ?? []), 'Agent'])];
     // Delegations must return their result to the orchestrator's turn, so no background subagents or
     // wake-up polling: several Agent calls in one message still run in parallel in the foreground.
@@ -530,47 +570,78 @@ export class ExecutorService {
       d.parallel
         ? 'When sub-tasks are independent, make several Agent calls in the same message; they run in parallel and all results come back to you.'
         : 'Delegate one sub-task at a time.'
-    } You may use a member more than once or not at all. Check the results, delegate again to fill gaps, then reply with the final, combined result.`;
+    } You may use a member more than once or not at all. Tools named mcp__${workerServerName('')}<member>__…, and tools only members are given, belong to those members: delegate instead of calling them yourself. Check the results, delegate again to fill gaps, then reply with the final, combined result.`;
 
-    // Map delegations (Agent tool calls) to worker nodes.
     const byKey = new Map(team.map((w) => [w.key, w.node]));
-    const delegations = new Map<string, string>();
+    // Tools only members have: the orchestrator may not call them itself (permissions are per session).
+    const own = new Set([...(d.allowedTools ?? []).map(toolBase), 'Agent']);
+    const memberOnly = new Set(team.flatMap((w) => (w.node.data.allowedTools ?? []).map(toolBase)).filter((t) => !own.has(t)));
+    const memberServer = new Map(team.map((w) => [`mcp__${workerServerName(w.key)}__`, w.node.data.name as string]));
+
+    const delegations = new Map<string, string>(); // Agent tool_use id → worker node id
+    const running = new Map<string, string>(); // subagent id → worker node id
     const active = new Map<string, number>();
+    const needsResult = new Set<string>(); // finished without a final message: take it from the tool result
+    const workerEmit = (id: string) => this.emitter(wf.id, run.id, h.workerRun(id));
+
+    opts.team = {
+      onStart: (key, agentId) => {
+        const worker = byKey.get(key);
+        if (!worker) return;
+        running.set(agentId, worker.id);
+        active.set(worker.id, (active.get(worker.id) ?? 0) + 1);
+        const wnr = h.workerRun(worker.id);
+        wnr.error = undefined;
+        setStatus(wnr, 'running');
+      },
+      onStop: (key, agentId, last) => {
+        const workerId = running.get(agentId) ?? byKey.get(key)?.id;
+        if (!workerId) return;
+        running.delete(agentId);
+        const left = Math.max(0, (active.get(workerId) ?? 1) - 1);
+        active.set(workerId, left);
+        const wnr = h.workerRun(workerId);
+        if (last?.trim()) wnr.output = { text: last.trim() };
+        else needsResult.add(workerId);
+        if (!left) setStatus(wnr, wnr.error ? 'failed' : 'success');
+        else this.bus.emit({ type: 'node', workflowId: wf.id, node: (({ events, ...rest }) => rest)(wnr) });
+      },
+      mainThreadDeny: (tool) => {
+        for (const [prefix, name] of memberServer) if (tool.startsWith(prefix)) return `${tool} belongs to team member "${name}". Delegate the work to that member instead of calling it yourself.`;
+        if (memberOnly.has(tool)) return `Only your team members may use ${tool}. Delegate the work to the member that has it.`;
+        return undefined;
+      },
+    };
+
+    // Briefs and live activity: subagent messages carry the id of the delegation they belong to.
     opts.onMessage = (msg) => {
       const parent: string | undefined = msg.parent_tool_use_id ?? undefined;
       const blocks: any[] = Array.isArray(msg.message?.content) ? msg.message.content : [];
       if (!parent && msg.type === 'assistant') {
         for (const b of blocks) {
-          if (b.type !== 'tool_use' || b.name !== 'Agent') continue;
-          const worker = byKey.get(workerKey(String(b.input?.subagent_type ?? '')));
+          if (b.type !== 'tool_use' || typeof b.input?.subagent_type !== 'string') continue;
+          const worker = byKey.get(workerKey(b.input.subagent_type));
           if (!worker) continue;
           delegations.set(b.id, worker.id);
-          active.set(worker.id, (active.get(worker.id) ?? 0) + 1);
           const wnr = h.workerRun(worker.id);
           wnr.prompt = [wnr.prompt, String(b.input?.prompt ?? '')].filter(Boolean).join('\n\n---\n\n');
-          wnr.error = undefined;
-          this.emitter(wf.id, run.id, wnr)({ t: 'info', text: `Task from ${d.name}: ${b.input?.description ?? ''}`, at: Date.now() });
-          setStatus(wnr, 'running');
+          workerEmit(worker.id)({ t: 'info', text: `Task from ${d.name}: ${b.input?.description ?? ''}`, at: Date.now() });
         }
       } else if (parent && delegations.has(parent)) {
-        const wnr = h.workerRun(delegations.get(parent)!);
-        const emit = this.emitter(wf.id, run.id, wnr);
+        const emit = workerEmit(delegations.get(parent)!);
         for (const ev of eventsFromMessage(msg)) emit(ev);
       } else if (!parent && msg.type === 'user') {
         for (const b of blocks) {
           if (b.type !== 'tool_result' || !delegations.has(b.tool_use_id)) continue;
           const workerId = delegations.get(b.tool_use_id)!;
           const wnr = h.workerRun(workerId);
-          const left = (active.get(workerId) ?? 1) - 1;
-          active.set(workerId, left);
-          const text = handBackText(toolResultText(b));
           if (b.is_error) {
-            wnr.error = text;
-            if (!left) setStatus(wnr, 'failed');
-          } else {
-            wnr.output = { text };
-            if (!left) setStatus(wnr, 'success');
-            else this.bus.emit({ type: 'node', workflowId: wf.id, node: (({ events, ...rest }) => rest)(wnr) });
+            // A delegation that failed (or never started) ends here rather than in SubagentStop.
+            wnr.error = clip(toolResultText(b), 1500);
+            if (!active.get(workerId)) setStatus(wnr, 'failed');
+          } else if (needsResult.delete(workerId)) {
+            wnr.output = { text: handBackText(toolResultText(b)) };
+            setStatus(wnr, wnr.status); // saves the result as well as showing it
           }
         }
       }
@@ -578,24 +649,31 @@ export class ExecutorService {
     return opts;
   }
 
-  private agentOptions(d: AgentData, prompt: string, stores: Array<{ id: string; data: MemoryData }> = [], run?: Run, sets: Array<{ id: string; name: string }> = []): AgentRunOptions {
+  private agentOptions(d: AgentData, prompt: string, stores: Array<{ id: string; data: MemoryData }> = [], run?: Run, sets: Array<{ id: string; name: string }> = [], untrusted = false): AgentRunOptions {
     const memoryContext = stores.length ? this.memory.contextFor(stores, prompt) : '';
+    const settings = loadSettings();
+    const datasets = sets.map((s) => s.id);
+    const pluginTools = this.plugins.toolDefs(d.pluginTools ?? []);
+    const outside = untrusted || readsOutside({ datasets, pluginTools });
     return {
       provider: d.provider,
-      datasets: sets.map((s) => s.id),
-      pluginTools: this.plugins.toolDefs(d.pluginTools ?? []),
+      datasets,
+      pluginTools,
       prompt,
       cwd: expandHome(d.cwd.trim()),
       model: d.model,
       effort: d.effort,
       memory: stores.length ? { search: stores.map((s) => s.id), write: stores.find((s) => s.data.allowWrite)?.id, runId: run?.id } : undefined,
-      appendSystemPrompt: [d.systemPrompt?.trim(), memoryContext, this.datasetContext(sets), d.canAsk ? ASK_PROTOCOL : ''].filter(Boolean).join('\n\n'),
+      appendSystemPrompt: [d.systemPrompt?.trim(), memoryContext, this.datasetContext(sets), d.canAsk ? ASK_PROTOCOL : '', outside ? UNTRUSTED_NOTE : ''].filter(Boolean).join('\n\n'),
       allowedTools: d.allowedTools,
       disallowedTools: d.disallowedTools,
       permissionMode: d.permissionMode,
       jsonSchema: d.outputSchema,
       askTool: !!d.canAsk,
-    };
+      maxTurns: Number(d.maxTurns) || settings.maxTurns,
+      maxBudgetUsd: d.maxBudgetUsd != null && String(d.maxBudgetUsd) !== '' ? Number(d.maxBudgetUsd) : settings.maxBudgetUsd,
+      ...(d.useClaudeSettings ? { settingSources: ['user', 'project', 'local'] as const, userMcpServers: true } : {}),
+    } as AgentRunOptions;
   }
 
   /** One agent turn (Claude or Codex) through the shared queue, with a single retry on rate limits. */
@@ -610,11 +688,21 @@ export class ExecutorService {
         () => setStatus(nr, 'queued'),
       );
     let res: AgentResult = await exec();
-    if (!res.ok && res.rateLimited && !signal.aborted) {
-      const wait = loadSettings().rateLimitRetryMs;
-      onEvent({ t: 'info', text: `Rate limited — retrying once in ${Math.round(wait / 1000)}s`, at: Date.now() });
-      await new Promise((r) => setTimeout(r, wait));
-      if (!signal.aborted) res = await exec();
+    for (let attempt = 0; !res.ok && !signal.aborted; attempt++) {
+      const decision = rateLimitDecision(res, attempt, loadSettings());
+      if (!decision) break;
+      if ('giveUp' in decision) {
+        res = { ...res, error: decision.giveUp };
+        onEvent({ t: 'error', text: decision.giveUp, at: Date.now() });
+        break;
+      }
+      const at = new Date(Date.now() + decision.waitMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      onEvent({ t: 'info', text: `At Claude's usage limit; retrying ${decision.waitMs >= 60_000 ? `at ${at}` : `in ${Math.round(decision.waitMs / 1000)}s`} (retry ${attempt + 1})`, at: Date.now() });
+      nr.costUsd = (nr.costUsd ?? 0) + res.costUsd;
+      run.costUsd += res.costUsd;
+      setStatus(nr, 'queued');
+      if (!(await sleep(decision.waitMs, signal))) break;
+      res = await exec();
     }
     nr.sessionId = res.sessionId;
     nr.costUsd = (nr.costUsd ?? 0) + res.costUsd;
@@ -704,6 +792,10 @@ export class ExecutorService {
       runId: run.id,
     };
     const onEvent = this.emitter(wf.id, run.id, nr);
+    // Outside content (sources, insights, webhook payloads) upstream: fence it wherever an AI step reads it.
+    const untrusted = this.hasOutsideInput(wf, node.id);
+    const wrap = untrusted ? (path: string, text: string) => (DATA_PATH.test(path) ? fence(text) : text) : undefined;
+    const data = (text: string) => (untrusted ? fence(text) : text);
     // Files produced upstream (by Output nodes / Save actions) keep flowing down the graph.
     const upstreamFiles = inputs.flatMap((i) => i.out?.files ?? []).filter((f, i, a) => a.findIndex((x) => x.id === f.id) === i);
     const upstreamStructured = inputs.length === 1 ? inputs[0].out?.structured : undefined;
@@ -735,12 +827,24 @@ Design notes: ${renderTemplate(d.instructions, ctx)}` : ''}
 When the file is written, reply with one line: the path.
 
 ## Content
-${input || '(empty)'}`;
+${input ? data(input) : '(empty)'}`;
           nr.prompt = prompt;
           const res = await this.callClaude(
             nr,
             run,
-            { prompt, cwd: folder, model: d.model || 'sonnet', allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'Skill'], permissionMode: 'dontAsk' },
+            {
+              prompt,
+              cwd: folder,
+              model: d.model || 'sonnet',
+              allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'Skill'],
+              permissionMode: 'dontAsk',
+              // The user's document skills (pdf, docx, pptx, xlsx) live in their user settings; their MCP servers stay out.
+              settingSources: ['user'],
+              maxTurns: loadSettings().maxTurns,
+              maxBudgetUsd: loadSettings().maxBudgetUsd,
+              persistSession: false,
+              appendSystemPrompt: untrusted ? UNTRUSTED_NOTE : undefined,
+            },
             signal,
             setStatus,
             onEvent,
@@ -868,10 +972,18 @@ ${input || '(empty)'}`;
           const list = batch
             .map((p, i) => `[${i + 1}] (${p.item.kind}${p.item.author ? ` by ${p.item.author}` : ''}) ${p.item.title ?? ''}\n${(p.item.text ?? '').replace(/\s+/g, ' ').slice(0, 700)}`)
             .join('\n\n');
-          const prompt = `Label each item of a media-monitoring dataset.${d.brief?.trim() ? `\n\nBrief (what we care about): ${renderTemplate(d.brief, ctx)}` : ''}\n\nFor every item return its number i and:\n${guide.map((g) => `- ${g}`).join('\n')}\n\n## Items\n${list}`;
+          const prompt = `Label each item of a media-monitoring dataset.${d.brief?.trim() ? `\n\nBrief (what we care about): ${renderTemplate(d.brief, ctx)}` : ''}\n\nFor every item return its number i and:\n${guide.map((g) => `- ${g}`).join('\n')}\n\n## Items\n${fence(list)}`;
           nr.prompt = prompt;
           onEvent({ t: 'info', text: `Labelling items ${b + 1}–${b + batch.length} of ${pending.length}…`, at: Date.now() });
-          const res = await this.callClaude(nr, run, { prompt, cwd: DATA_DIR, model: d.model || 'haiku', tools: [], jsonSchema: schema, permissionMode: 'dontAsk' }, signal, setStatus, onEvent);
+          const res = await this.callClaude(
+            nr,
+            run,
+            // Items always come from the web, so they are always fenced.
+            { prompt, cwd: DATA_DIR, model: d.model || 'haiku', tools: [], jsonSchema: schema, permissionMode: 'dontAsk', systemPrompt: `${ONE_OFF_PROMPT}\n\n${UNTRUSTED_NOTE}`, maxTurns: ONE_OFF_TURNS, persistSession: false },
+            signal,
+            setStatus,
+            onEvent,
+          );
           if (!res.ok) throw new Error(res.error || 'Labelling failed');
           setStatus(nr, 'running');
           const results: any[] = (res.structured as any)?.results ?? [];
@@ -953,7 +1065,7 @@ ${input || '(empty)'}`;
       // Agent node, or an LLM-judged condition: both are agent runs.
       let res: AgentResult;
       if (node.kind === 'condition') {
-        const prompt = `Answer this yes/no question about the input below.\n\nQuestion: ${renderTemplate(node.data.question, ctx)}\n\n## Input\n${input || '(empty)'}`;
+        const prompt = `Answer this yes/no question about the input below.\n\nQuestion: ${renderTemplate(node.data.question, ctx)}\n\n## Input\n${input ? data(input) : '(empty)'}`;
         nr.prompt = prompt;
         const opts: AgentRunOptions = {
           prompt,
@@ -962,26 +1074,29 @@ ${input || '(empty)'}`;
           tools: [],
           jsonSchema: JUDGE_SCHEMA,
           permissionMode: 'dontAsk',
+          systemPrompt: [ONE_OFF_PROMPT, untrusted ? UNTRUSTED_NOTE : ''].filter(Boolean).join('\n\n'),
+          maxTurns: ONE_OFF_TURNS,
+          persistSession: false,
         };
         res = await this.callClaude(nr, run, opts, signal, setStatus, onEvent);
       } else {
         const d = node.data as AgentData;
-        let prompt = renderTemplate(d.prompt, ctx);
+        let prompt = renderTemplate(d.prompt, ctx, wrap);
         // Pipelines "just work": if the prompt doesn't place {{input}} itself, append it.
         // (A step fed only by the trigger that already uses {{trigger...}} doesn't need it twice.)
         const placesInput = /\{\{\s*input\s*\}\}/.test(d.prompt);
         const onlyTrigger = inputs.every((i) => i.from.kind.startsWith('trigger.'));
         const placesTrigger = /\{\{\s*trigger[.\s}]/.test(d.prompt);
         if (input.trim() && !placesInput && !(onlyTrigger && placesTrigger)) {
-          prompt += `\n\n## Input from ${onlyTrigger ? 'the trigger' : 'the previous step'}\n${input}`;
+          prompt += `\n\n## Input from ${onlyTrigger ? 'the trigger' : 'the previous step'}\n${data(input)}`;
         }
         nr.prompt = prompt;
         const stores = this.memoryFor(wf, node, run, onEvent);
         if (node.kind === 'orchestrator') {
-          const opts = this.orchestratorOptions(wf, node, prompt, stores, run, onEvent, setStatus, h);
+          const opts = this.orchestratorOptions(wf, node, prompt, stores, run, onEvent, setStatus, h, untrusted);
           res = await this.agentTurn(wf, node, nr, run, opts, signal, setStatus, onEvent, stores);
         } else {
-          res = await this.agentTurn(wf, node, nr, run, this.agentOptions(d, prompt, stores, run, this.datasetsFor(wf, node)), signal, setStatus, onEvent, stores);
+          res = await this.agentTurn(wf, node, nr, run, this.agentOptions(d, prompt, stores, run, this.datasetsFor(wf, node), untrusted), signal, setStatus, onEvent, stores);
         }
       }
 

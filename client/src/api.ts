@@ -15,7 +15,7 @@ export interface TriggerStatus {
   error?: string;
 }
 
-export type WorkflowView = Workflow & { issues: ValidationIssue[]; triggers: TriggerStatus[] };
+export type WorkflowView = Workflow & { issues: ValidationIssue[]; warnings?: ValidationIssue[]; triggers: TriggerStatus[] };
 
 export interface TemplateInfo {
   key: string;
@@ -159,6 +159,10 @@ export interface Settings {
   concurrency: number;
   claudeBin: string;
   rateLimitRetryMs: number;
+  rateLimitRetries: number;
+  rateLimitMaxWaitMs: number;
+  maxTurns: number;
+  maxBudgetUsd: number;
   desktopNotifications: boolean;
   outputsDir: string;
   chromePath: string;

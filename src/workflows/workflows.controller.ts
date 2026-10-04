@@ -8,7 +8,7 @@ import { PluginsService } from '../plugins/plugins.service';
 import { TEMPLATES } from '../templates/templates';
 import { TriggersService } from '../triggers/triggers.service';
 import { applyAnswers } from './answers';
-import { validateWorkflow } from './validate';
+import { validateWorkflow, workflowWarnings } from './validate';
 import { WorkflowsService } from './workflows.service';
 
 /** Only these fields are client-editable; ids, tokens and timestamps are server-owned. */
@@ -41,7 +41,7 @@ export class WorkflowsController {
   ) {}
 
   private view(wf: Workflow) {
-    return { ...wf, issues: validateWorkflow(wf), triggers: this.triggers.status(wf.id) };
+    return { ...wf, issues: validateWorkflow(wf), warnings: workflowWarnings(wf), triggers: this.triggers.status(wf.id) };
   }
 
   @Get('workflows')

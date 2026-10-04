@@ -391,6 +391,12 @@ export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, fo
     return m;
   }, [view.issues]);
 
+  const warningsByNode = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const i of view.warnings ?? []) if (i.nodeId) m.set(i.nodeId, [...(m.get(i.nodeId) ?? []), i.message]);
+    return m;
+  }, [view.warnings]);
+
   const displayNodes = useMemo(
     () =>
       nodes.map((n) => {
@@ -622,6 +628,7 @@ export function Editor({ workflow, onSaved, onDelete, notify, onDirty, inbox, fo
             nodeRun={viewed?.nodes[selected.id]}
             trigger={view.triggers.find((t) => t.nodeId === selected.id)}
             issues={issuesByNode.get(selected.id) ?? []}
+            warnings={dirty ? [] : (warningsByNode.get(selected.id) ?? [])}
             pending={pendingFor(selected.id)}
             team={edges
               .filter((e) => e.source === selected.id && e.sourceHandle === 'team')

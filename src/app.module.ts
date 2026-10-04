@@ -3,6 +3,8 @@ import { ServeStaticModule } from '@nestjs/serve-static';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { AgentRunnerService } from './engine/agent-runner.service';
+import { AppToolsService } from './engine/app-tools.service';
+import { InternalToolsController } from './engine/internal-tools.controller';
 import { EventBus } from './engine/event-bus';
 import { ExecutorService } from './engine/executor.service';
 import { InboxService } from './engine/inbox.service';
@@ -37,7 +39,7 @@ const staticImports: DynamicModule[] = existsSync(join(clientDist, 'index.html')
 
 @Module({
   imports: [...staticImports],
-  controllers: [WorkflowsController, RunsController, HooksController, SystemController, MemoryController, FilesController, DashboardController, ReviewPageController, NotifyTestController, PluginsController, DatasetsController, AssistantController],
-  providers: [WorkflowsService, RunsStore, EventBus, ProcessQueue, AgentRunnerService, ExecutorService, InboxService, MemoryService, ActionsService, TriggersService, ExportService, PluginsService, DatasetsService, AssistantService],
+  controllers: [WorkflowsController, RunsController, HooksController, SystemController, MemoryController, FilesController, DashboardController, ReviewPageController, NotifyTestController, PluginsController, DatasetsController, AssistantController, InternalToolsController],
+  providers: [WorkflowsService, RunsStore, EventBus, ProcessQueue, AgentRunnerService, ExecutorService, InboxService, MemoryService, ActionsService, TriggersService, ExportService, PluginsService, DatasetsService, AssistantService, AppToolsService],
 })
 export class AppModule {}

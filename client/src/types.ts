@@ -35,8 +35,12 @@ export interface AgentData {
   cwd: string;
   /** Optional JSON Schema (as text) forcing structured output. */
   outputSchema?: string;
-  /** Only used when exporting to .claude/agents/*.md. */
+  /** Stop after this many agentic turns (default: Settings → Max turns). Also exported to .claude/agents/*.md. */
   maxTurns?: number;
+  /** Stop once this step's estimated cost passes this many dollars (default: Settings → Max spend; 0 = no limit). */
+  maxBudgetUsd?: number;
+  /** Load the user's own Claude Code settings: CLAUDE.md, skills, hooks, plugins and MCP servers. Off by default. */
+  useClaudeSettings?: boolean;
   /** Let the agent pause and ask the user a question (answered in the app, then the session resumes). */
   canAsk?: boolean;
   maxQuestions?: number;

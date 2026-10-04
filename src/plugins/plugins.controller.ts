@@ -1,7 +1,6 @@
-import { BadRequestException, Body, Controller, ForbiddenException, Get, Headers, Param, Post, Put } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Post, Put } from '@nestjs/common';
 import { execFile } from 'child_process';
 import { PLUGINS_DIR } from '../common/paths';
-import { isInternal } from '../common/runtime';
 import { DatasetsService } from '../datasets/datasets.service';
 import { PluginsService } from './plugins.service';
 
@@ -82,13 +81,5 @@ export class PluginsController {
   @Get('plugins/tools')
   tools() {
     return this.plugins.tools();
-  }
-
-  // ---- called by the bundled MCP tool server inside an agent's CLI process ----
-
-  @Post('internal/plugins/call')
-  async internalCall(@Headers('x-internal-token') token: string, @Body() body: { tool?: string; args?: Record<string, unknown> }) {
-    if (!isInternal(token)) throw new ForbiddenException();
-    return { text: await this.plugins.callTool(String(body?.tool ?? ''), body?.args ?? {}, AbortSignal.timeout(120_000)) };
   }
 }

@@ -854,6 +854,9 @@ input[type='checkbox'] {
   color: var(--muted);
   line-height: 1.4;
 }
+.insp-warn {
+  margin: 10px 14px 0;
+}
 .row2 {
   display: grid;
   grid-template-columns: 1fr 1fr;

@@ -123,7 +123,8 @@ Text fields may use {{today}}, {{input}} (previous step's output), {{files}}, {{
 
   private async ask(prompt: string, resume?: string) {
     const res = await this.queue.run(
-      () => this.agents.run({ prompt, cwd: WORKSPACE_DIR, model: 'sonnet', tools: [], jsonSchema: SCHEMA, permissionMode: 'dontAsk', appendSystemPrompt: this.systemPrompt(), resumeSessionId: resume }),
+      // Its own system prompt (no tools, so Claude Code's agent prompt would only cost tokens); kept on disk because fixes resume it.
+      () => this.agents.run({ prompt, cwd: WORKSPACE_DIR, model: 'sonnet', tools: [], jsonSchema: SCHEMA, permissionMode: 'dontAsk', systemPrompt: this.systemPrompt(), maxTurns: 4, resumeSessionId: resume }),
       () => undefined,
     );
     if (!res.ok) throw new BadRequestException(res.rateLimited ? 'Claude is at its usage limit right now. Try again after it resets.' : `Claude couldn’t build it: ${res.error ?? 'no answer'}`);

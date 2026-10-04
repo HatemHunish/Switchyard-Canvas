@@ -51,7 +51,8 @@ export function validateWorkflow(wf: Workflow): ValidationIssue[] {
     else workers.add(tgt.id);
   }
   for (const id of workers) {
-    if (flow.some((e) => e.target === id || e.source === id)) {
+    // Memory and Dataset connections are stores, not flow steps: members may have their own.
+    if (flow.some((e) => (e.target === id && !isStore(byId.get(e.source)?.kind)) || e.source === id)) {
       issues.push({ nodeId: id, message: `"${byId.get(id)?.data?.name}" is a team member, so it runs when the orchestrator delegates. Remove its other flow connections.` });
     }
   }
@@ -170,4 +171,50 @@ export function validateWorkflow(wf: Workflow): ValidationIssue[] {
   if (seen < wf.nodes.length) issues.push({ message: 'The workflow has a loop. Steps must flow one way; use a Human review’s ↩ revise handle to loop back.' });
 
   return issues;
+}
+
+const RISKY_TOOLS = ['Bash', 'Write', 'Edit', 'NotebookEdit', 'WebFetch'];
+const OUTSIDE = new Set(['source', 'insight', 'trigger.webhook']);
+
+/**
+ * Things worth a look that don't stop a run: AI steps that read outside content
+ * (sources, insights, webhooks) while holding tools that act on this Mac or the web.
+ * The content is fenced off as untrusted, but a text crafted to trick the agent is still a risk.
+ */
+export function workflowWarnings(wf: Workflow): ValidationIssue[] {
+  const out: ValidationIssue[] = [];
+  const byId = new Map(wf.nodes.map((n) => [n.id, n]));
+  const flow = wf.edges.filter((e) => !isLoop(e) && !isTeam(e));
+  const outsideFrom = (id: string): string | undefined => {
+    const seen = new Set<string>();
+    const todo = [id];
+    while (todo.length) {
+      const cur = todo.pop()!;
+      for (const e of flow) {
+        if (e.target !== cur || seen.has(e.source)) continue;
+        const src = byId.get(e.source);
+        if (src && OUTSIDE.has(src.kind)) return src.label?.trim() || src.data?.name || (src.kind === 'trigger.webhook' ? 'the webhook' : src.kind);
+        seen.add(e.source);
+        todo.push(e.source);
+      }
+    }
+    return undefined;
+  };
+  for (const n of wf.nodes) {
+    if (n.kind !== 'agent' && n.kind !== 'orchestrator') continue;
+    const members = wf.edges.filter((e) => e.source === n.id && isTeam(e)).map((e) => byId.get(e.target)).filter(Boolean);
+    const datas = [n.data, ...members.map((m) => m!.data)];
+    // Upstream sources, or tools that fetch outside content (datasets connected to it or its members, plugin tools).
+    const readsData = [n, ...members].some((x) => wf.edges.some((e) => e.target === x!.id && byId.get(e.source)?.kind === 'dataset'));
+    const from = outsideFrom(n.id) ?? (readsData ? 'its dataset' : datas.some((d) => d?.pluginTools?.length) ? 'its plugin tools' : undefined);
+    if (!from) continue;
+    const tools = [...new Set(datas.flatMap((d) => (d?.allowedTools ?? []).map((t: string) => t.split('(')[0].trim())).filter((t) => RISKY_TOOLS.includes(t)))];
+    const bypass = datas.some((d) => d?.permissionMode === 'bypassPermissions');
+    if (!tools.length && !bypass) continue;
+    out.push({
+      nodeId: n.id,
+      message: `Reads outside content from "${from}" and can use ${bypass ? 'every tool (bypassPermissions)' : tools.join(', ')}. Text in that content could try to trick it. Remove those tools if it only needs to read and write text, or put a Human review before anything it does.`,
+    });
+  }
+  return out;
 }

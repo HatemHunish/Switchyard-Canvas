@@ -21,8 +21,16 @@ export interface Settings {
   concurrency: number;
   /** Path/name of the Claude Code CLI, used for setup (install/login status); runs use the Agent SDK. */
   claudeBin: string;
-  /** Retry once after this delay when a run hits a rate limit. */
+  /** First wait before retrying a rate-limited step when the reset time is unknown (doubles each retry). */
   rateLimitRetryMs: number;
+  /** How many times a rate-limited step is retried. */
+  rateLimitRetries: number;
+  /** Wait for a known usage-limit reset only if it's at most this far away; otherwise fail with the reset time. */
+  rateLimitMaxWaitMs: number;
+  /** Default turn limit for agent steps (each step can set its own). */
+  maxTurns: number;
+  /** Default spending limit in USD for one agent step's turn (0 = none). Estimated by Claude Code. */
+  maxBudgetUsd: number;
   /** macOS notification when a run needs your review or answer. */
   desktopNotifications: boolean;
   /** Where Output nodes write by default (per-workflow subfolders). */
@@ -47,6 +55,10 @@ const DEFAULT_SETTINGS: Settings = {
   concurrency: 2,
   claudeBin: process.env.CLAUDE_BIN || 'claude',
   rateLimitRetryMs: 60_000,
+  rateLimitRetries: 2,
+  rateLimitMaxWaitMs: 30 * 60_000,
+  maxTurns: 100,
+  maxBudgetUsd: 10,
   desktopNotifications: true,
   outputsDir: join(DATA_DIR, 'outputs'),
   chromePath: '',

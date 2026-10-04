@@ -105,7 +105,7 @@ Schedule, file and webhook triggers only fire while the workflow is **Enabled** 
 
 ## Human in the loop
 
-- **Agents can ask you questions.** Turn on *Can ask me questions* on an agent. It gets an `ask_user` tool from a small MCP server bundled with the app (`src/mcp/ask-server.ts`). When it calls the tool, its turn ends, the run pauses, and your answer resumes **the same Claude session** (`--resume`), so it keeps all its context.
+- **Agents can ask you questions.** Turn on *Can ask me questions* on an agent. It gets an `ask_user` tool from the app's own tool server. When it calls the tool, a hook ends its turn right there (whatever it would have written next), the run pauses, and your answer resumes **the same Claude session** (`--resume`), so it keeps all its context.
 - **Reviews** come from the Human review node (see above).
 - Anything waiting shows in the **Inbox** (top bar), on the canvas (pulsing node plus a "Waiting for you" banner), in the tab title, and as a macOS notification (Settings).
 - A waiting run holds no agent process and no queue slot. It can wait for hours, but **restarting the app cancels runs that are waiting**.
@@ -116,9 +116,10 @@ Schedule, file and webhook triggers only fire while the workflow is **Enabled** 
 ## Orchestrator and team
 
 - Team members are normal Agent nodes. Their **description** is how the orchestrator decides when to use them, so make it specific. Their prompt becomes standing instructions; the orchestrator's brief is the actual task.
-- Members share the orchestrator's working directory. They can't ask you questions, but the orchestrator can (Can ask me questions). Members can use Memory nodes connected to them.
+- Members share the orchestrator's working directory. They can't ask you questions, but the orchestrator can (Can ask me questions). Members can use Memory and Dataset nodes connected to them. Each member gets its own tool server, so it sees only its own memories, datasets and plugin tools, and its notes are saved to its own memory.
 - Background subagents are turned off for orchestrators (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`), so every delegation reports back. Parallel work is several delegations in one turn.
-- Tools allowed for any member are allowed for the whole session (permissions are per session in Claude Code), so the orchestrator could technically use them too.
+- Tools allowed for any member are allowed for the whole session (permissions are per session in Claude Code), so a hook stops the orchestrator from using tools only its members have: it's told to delegate instead.
+- Member nodes light up and record their results from Claude Code's SubagentStart/SubagentStop hooks.
 - A Human review can loop back (↩ revise) to an orchestrator; it then re-plans with your feedback.
 
 ## Memory and RAG
@@ -128,7 +129,7 @@ Schedule, file and webhook triggers only fire while the workflow is **Enabled** 
 - **Remember my answers**: when a connected agent asks you something, the question and your answer are saved as a note, and the next run gets them up front instead of asking again.
 - Several agents connected to one memory share it within a run and across runs. That's how later steps reuse what earlier ones found.
 - Data lives in `~/.agent-canvas/memory.db`. A workflow's private memory is deleted with the workflow; shared memories are kept.
-- Agent tools reach the app through the bundled MCP server (`src/mcp/tools-server.ts`) over localhost, authenticated with a per-process secret.
+- Claude agents get these tools from an in-process MCP server (no extra process). Codex agents use the stdio server in `src/mcp/tools-server.ts`, which calls back over localhost with a per-process secret. Either way a tool only reaches the stores in that agent's own scope.
 
 ## Files and actions
 
@@ -143,9 +144,23 @@ Schedule, file and webhook triggers only fire while the workflow is **Enabled** 
 ## Safety defaults
 
 - Agents run with `--permission-mode dontAsk` and `--permission-prompts none`, so only the tools you allow are available and headless runs never hang waiting on a permission prompt.
+- Agents don't load your own Claude Code setup (CLAUDE.md files, skills, hooks, plugins, MCP servers), so a workflow behaves the same on every Mac. Turn on **Use my Claude Code settings** on an agent to load them. *Designed by Claude* output steps load your skills (for the document skills) but not your MCP servers.
+- Every AI step has a **Max turns** and **Max spend** limit (Settings has the defaults: 100 turns, $10 as estimated by Claude Code). A step that reaches one stops and says which.
+- Content from Sources, Insights, Datasets, plugin tools and webhooks is wrapped in `<untrusted_content>` tags, and the agent is told to treat it as data, never instructions. A step that reads such content while it can use Bash, Write, Edit, WebFetch or bypassPermissions gets a warning in its settings.
+- Labelling and yes/no judging use a short system prompt of their own instead of Claude Code's (they have no tools), and leave no session files behind.
+- **Usage limits:** when Claude reports when the limit resets and it's within **Settings → Wait for a usage-limit reset** (30 minutes by default), the step waits and retries. Otherwise it backs off and retries (twice by default), or fails and tells you the reset time.
 - `bypassPermissions` is available per agent, with a warning. Use it only in throwaway folders.
 - The server binds to localhost. Webhooks need a per-workflow token and only work while the workflow is enabled.
 - **Settings → Max agents running at once** (default 2) queues extra runs, because they all share one subscription's usage limits. The top bar shows your 5-hour usage as reported by the CLI.
+
+## Tests
+
+```bash
+npm test            # unit tests: no Claude usage
+npm run test:live   # end-to-end with your Claude (and Codex, if signed in) login; uses a little usage (Haiku)
+```
+
+Tests use a throwaway data folder, never `~/.agent-canvas`.
 
 ## Data
 

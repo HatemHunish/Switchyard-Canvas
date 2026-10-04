@@ -278,6 +278,10 @@ export class SystemController {
       next.userEmail = e;
     }
     if (body.rateLimitRetryMs !== undefined) next.rateLimitRetryMs = Math.max(0, Number(body.rateLimitRetryMs) || 0);
+    if (body.rateLimitRetries !== undefined) next.rateLimitRetries = Math.min(10, Math.max(0, Math.floor(Number(body.rateLimitRetries) || 0)));
+    if (body.rateLimitMaxWaitMs !== undefined) next.rateLimitMaxWaitMs = Math.max(0, Number(body.rateLimitMaxWaitMs) || 0);
+    if (body.maxTurns !== undefined) next.maxTurns = Math.max(1, Math.floor(Number(body.maxTurns) || 1));
+    if (body.maxBudgetUsd !== undefined) next.maxBudgetUsd = Math.max(0, Number(body.maxBudgetUsd) || 0);
     saveSettings(next);
     this.queue.setLimit(next.concurrency);
     this.cache = null;

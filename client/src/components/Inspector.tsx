@@ -20,6 +20,8 @@ interface Props {
   nodeRun?: NodeRun;
   trigger?: TriggerStatus;
   issues: string[];
+  /** Non-blocking advice, e.g. risky tools on a step that reads web content. */
+  warnings?: string[];
   /** A review/question from this step that is waiting for the user. */
   pending?: HumanRequest;
   /** Human review only: the agent its ↩ revise loop points to. */
@@ -106,7 +108,7 @@ function copy(text: string) {
   void navigator.clipboard?.writeText(text);
 }
 
-export function Inspector({ node, workflowId, workflowName, webhookToken, saved, nodeRun, trigger, issues, pending, loopTarget, team, workerOf, onSelectNode, notify, onChange, onLabel, onDelete, onRun, onOpenPlugins, onOpenInsights, upstream = [] }: Props) {
+export function Inspector({ node, workflowId, workflowName, webhookToken, saved, nodeRun, trigger, issues, warnings = [], pending, loopTarget, team, workerOf, onSelectNode, notify, onChange, onLabel, onDelete, onRun, onOpenPlugins, onOpenInsights, upstream = [] }: Props) {
   const simple = useSimple();
   const d = node.data.config;
   const kind = node.data.kind;
@@ -165,6 +167,13 @@ export function Inspector({ node, workflowId, workflowName, webhookToken, saved,
           ))}
         </ul>
       )}
+
+      {tab === 'config' &&
+        warnings.map((w) => (
+          <div key={w} className="warn insp-warn">
+            {w}
+          </div>
+        ))}
 
       {tab === 'config' && (
         <div className="insp-body">
@@ -330,9 +339,30 @@ export function Inspector({ node, workflowId, workflowName, webhookToken, saved,
               </>
             )}
             {!simple && (
-              <Field label="Max turns (export only)">
-                <input type="number" min={1} value={d.maxTurns ?? ''} onChange={(e) => onChange({ maxTurns: e.target.value ? Number(e.target.value) : undefined })} />
-              </Field>
+              <>
+                <div className="row2">
+                  <Field label="Max turns" hint="Empty = the default in Settings.">
+                    <input type="number" min={1} value={d.maxTurns ?? ''} placeholder="default" onChange={(e) => onChange({ maxTurns: e.target.value ? Number(e.target.value) : undefined })} />
+                  </Field>
+                  {d.provider !== 'codex' && (
+                    <Field label="Max spend ($)" hint="Per run of this step. Empty = default, 0 = none.">
+                      <input type="number" min={0} step={0.5} value={d.maxBudgetUsd ?? ''} placeholder="default" onChange={(e) => onChange({ maxBudgetUsd: e.target.value === '' ? undefined : Number(e.target.value) })} />
+                    </Field>
+                  )}
+                </div>
+                {d.provider !== 'codex' && (
+                  <label className="toggle-row">
+                    <input type="checkbox" checked={!!d.useClaudeSettings} onChange={(e) => onChange({ useClaudeSettings: e.target.checked })} />
+                    <span>
+                      <b>Use my Claude Code settings</b>
+                      <span className="field-hint">
+                        Loads your CLAUDE.md files, skills, hooks, plugins and MCP servers into this agent. Off by default, so runs behave the same on every Mac and aren’t affected by
+                        your personal setup.
+                      </span>
+                    </span>
+                  </label>
+                )}
+              </>
             )}
             </>
           )}

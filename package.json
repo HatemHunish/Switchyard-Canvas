@@ -1,7 +1,7 @@
 {
   "name": "agent-canvas",
   "version": "0.1.0",
-  "description": "Local visual builder for Claude agents and workflows — monitors, triggers and pipelines, run on the Claude Agent SDK or OpenAI Codex with your own logins.",
+  "description": "Local visual builder for Claude agents and workflows \u2014 monitors, triggers and pipelines, run on the Claude Agent SDK or OpenAI Codex with your own logins.",
   "license": "MIT",
   "private": true,
   "scripts": {
@@ -14,11 +14,14 @@
     "dev:client": "npm --prefix client run dev",
     "dev": "concurrently -n server,client -c blue,magenta \"npm run dev:server\" \"npm run dev:client\"",
     "typecheck": "tsc --noEmit -p tsconfig.build.json && npm --prefix client run typecheck",
+    "test": "node --test --require ./test/setup.js test/unit/*.test.ts",
+    "test:live": "npm run build:server && LIVE=1 node --test --test-concurrency=1 --require ./test/setup.js test/live/*.test.ts",
     "postinstall": "npm --prefix client install",
     "package:mac": "bash scripts/package-mac.sh"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.288",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "@nestjs/common": "^10.4.15",
     "@nestjs/core": "^10.4.15",
     "@nestjs/platform-express": "^10.4.15",
