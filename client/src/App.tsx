@@ -253,6 +253,16 @@ function SettingsDialog({ onClose, notify, onSetup }: { onClose: () => void; not
           </label>
         </div>
         <span className="field-hint">Defaults for steps that don't set their own. A step that reaches a limit stops and says which one. Spend is Claude Code's estimate.</span>
+        <label className="field">
+          <span className="field-label">Sites every agent's shell commands may reach</span>
+          <input
+            defaultValue={(s.sandboxDomains ?? []).join(', ')}
+            placeholder="none, e.g. pypi.org, github.com"
+            // Parsed when you leave the field, so typing commas and spaces isn't interrupted.
+            onBlur={(e) => setS({ ...s, sandboxDomains: e.target.value.split(/[\s,]+/).filter(Boolean) })}
+          />
+          <span className="field-hint">Agents' shell commands run in a sandbox with no network; list sites here (or on a step) to allow them.</span>
+        </label>
         <div className="row2">
           <label className="field">
             <span className="field-label">Retries after a usage limit</span>

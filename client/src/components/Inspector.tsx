@@ -350,6 +350,29 @@ export function Inspector({ node, workflowId, workflowName, webhookToken, saved,
                     </Field>
                   )}
                 </div>
+                {d.provider === 'codex' ? (
+                  <p className="field-hint">Shell commands run in Codex’s own sandbox: writes only in the working directory, network only when the agent has web tools.</p>
+                ) : (
+                  <>
+                    <label className="toggle-row">
+                      <input type="checkbox" checked={d.sandbox !== false} onChange={(e) => onChange({ sandbox: e.target.checked ? undefined : false })} />
+                      <span>
+                        <b>Sandbox shell commands</b>
+                        <span className="field-hint">
+                          Commands can write only inside the working directory and can’t reach the network or your keys, logins and app data.
+                          {kind === 'orchestrator' ? ' Covers the whole team.' : ''}
+                        </span>
+                      </span>
+                    </label>
+                    {d.sandbox === false ? (
+                      <div className="warn">Shell commands run with your full permissions: they can read and change any of your files and reach any site. Use only for trusted tasks.</div>
+                    ) : (
+                      <Field label="Network for shell commands" hint="Sites its commands may reach, e.g. pypi.org or github.com. Empty = no network (WebSearch and WebFetch are separate tools).">
+                        <ToolsInput value={d.networkDomains ?? []} onChange={(v) => onChange({ networkDomains: v })} />
+                      </Field>
+                    )}
+                  </>
+                )}
                 {d.provider !== 'codex' && (
                   <label className="toggle-row">
                     <input type="checkbox" checked={!!d.useClaudeSettings} onChange={(e) => onChange({ useClaudeSettings: e.target.checked })} />

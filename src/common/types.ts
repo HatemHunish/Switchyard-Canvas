@@ -42,6 +42,10 @@ export interface AgentData {
   maxBudgetUsd?: number;
   /** Load the user's own Claude Code settings: CLAUDE.md, skills, hooks, plugins and MCP servers. Off by default. */
   useClaudeSettings?: boolean;
+  /** Run shell commands in the OS sandbox (writes only in the working directory, network only to listed domains). On unless false. */
+  sandbox?: boolean;
+  /** Domains this agent's shell commands may reach when sandboxed (added to Settings → sandbox domains). */
+  networkDomains?: string[];
   /** Let the agent pause and ask the user a question (answered in the app, then the session resumes). */
   canAsk?: boolean;
   maxQuestions?: number;

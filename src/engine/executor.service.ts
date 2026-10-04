@@ -17,6 +17,7 @@ import { EventBus } from './event-bus';
 import { InboxService, RequestClosedError } from './inbox.service';
 import { ProcessQueue } from './queue';
 import { rateLimitDecision, sleep } from './retry';
+import { cleanDomains, SandboxSpec } from './sandbox';
 import { RunsStore } from './runs.store';
 import { renderTemplate } from './template';
 
@@ -558,6 +559,8 @@ export class ExecutorService {
       };
     }
     opts.agents = agents;
+    // One session, one sandbox: members' shell commands are confined like the orchestrator's, with their domains added.
+    opts.sandbox = this.sandboxFor([d, ...team.map((w) => w.node.data as AgentData)], opts.cwd);
     // Permissions are per session, so members' tools must be allowed too (headless runs deny anything else).
     opts.allowedTools = [...new Set([...(d.allowedTools ?? []), ...team.flatMap((w) => w.node.data.allowedTools ?? []), 'Agent'])];
     // Delegations must return their result to the orchestrator's turn, so no background subagents or
@@ -673,7 +676,17 @@ export class ExecutorService {
       maxTurns: Number(d.maxTurns) || settings.maxTurns,
       maxBudgetUsd: d.maxBudgetUsd != null && String(d.maxBudgetUsd) !== '' ? Number(d.maxBudgetUsd) : settings.maxBudgetUsd,
       ...(d.useClaudeSettings ? { settingSources: ['user', 'project', 'local'] as const, userMcpServers: true } : {}),
+      sandbox: this.sandboxFor([d], expandHome(d.cwd.trim())),
     } as AgentRunOptions;
+  }
+
+  /**
+   * Sandbox for shell commands of one session (an agent, or an orchestrator with its members, who share it):
+   * writes only in the working directory; network only to the Settings domains plus every listed agent's own.
+   */
+  private sandboxFor(datas: AgentData[], cwd: string): SandboxSpec {
+    if (datas[0]?.sandbox === false) return false;
+    return { writable: [cwd], domains: cleanDomains([...loadSettings().sandboxDomains, ...datas.flatMap((d) => d.networkDomains ?? [])]) };
   }
 
   /** One agent turn (Claude or Codex) through the shared queue, with a single retry on rate limits. */
@@ -844,6 +857,8 @@ ${input ? data(input) : '(empty)'}`;
               maxBudgetUsd: loadSettings().maxBudgetUsd,
               persistSession: false,
               appendSystemPrompt: untrusted ? UNTRUSTED_NOTE : undefined,
+              // Its scripts write the file into the output folder and nowhere else, with no network.
+              sandbox: { writable: [folder], domains: [] },
             },
             signal,
             setStatus,

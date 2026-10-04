@@ -174,6 +174,8 @@ export function validateWorkflow(wf: Workflow): ValidationIssue[] {
 }
 
 const RISKY_TOOLS = ['Bash', 'Write', 'Edit', 'NotebookEdit', 'WebFetch'];
+// Inside the sandbox, shell commands and file edits stay in the agent's folder with no network; WebFetch runs outside it.
+const RISKY_SANDBOXED = ['WebFetch'];
 const OUTSIDE = new Set(['source', 'insight', 'trigger.webhook']);
 
 /**
@@ -208,12 +210,18 @@ export function workflowWarnings(wf: Workflow): ValidationIssue[] {
     const readsData = [n, ...members].some((x) => wf.edges.some((e) => e.target === x!.id && byId.get(e.source)?.kind === 'dataset'));
     const from = outsideFrom(n.id) ?? (readsData ? 'its dataset' : datas.some((d) => d?.pluginTools?.length) ? 'its plugin tools' : undefined);
     if (!from) continue;
-    const tools = [...new Set(datas.flatMap((d) => (d?.allowedTools ?? []).map((t: string) => t.split('(')[0].trim())).filter((t) => RISKY_TOOLS.includes(t)))];
+    // The session's sandbox is the agent's (an orchestrator's covers its members); Codex always uses its own.
+    const sandboxed = n.data?.sandbox !== false || n.data?.provider === 'codex';
+    const risky = sandboxed ? RISKY_SANDBOXED : RISKY_TOOLS;
+    const tools = [...new Set(datas.flatMap((d) => (d?.allowedTools ?? []).map((t: string) => t.split('(')[0].trim())).filter((t) => risky.includes(t)))];
     const bypass = datas.some((d) => d?.permissionMode === 'bypassPermissions');
     if (!tools.length && !bypass) continue;
+    const what = bypass ? 'every tool (bypassPermissions)' : tools.join(', ');
     out.push({
       nodeId: n.id,
-      message: `Reads outside content from "${from}" and can use ${bypass ? 'every tool (bypassPermissions)' : tools.join(', ')}. Text in that content could try to trick it. Remove those tools if it only needs to read and write text, or put a Human review before anything it does.`,
+      message: sandboxed
+        ? `Reads outside content from "${from}" and can use ${what}, which works outside the sandbox. Text in that content could try to trick it into sending data out. Limit it to specific sites (e.g. WebFetch(domain:example.com)) or put a Human review before anything it does.`
+        : `Reads outside content from "${from}" and can use ${what} with the sandbox turned off. Text in that content could try to trick it. Turn the sandbox back on, remove those tools if it only needs to read and write text, or put a Human review before anything it does.`,
     });
   }
   return out;

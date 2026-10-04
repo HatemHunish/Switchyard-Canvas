@@ -3,7 +3,8 @@
 // Fix 5 (team hooks), Fix 6 (short system prompt, no session file), Fix 1/7 (member tool servers).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildOptions, resultError } from '../../src/engine/providers/claude';
+import { buildOptions, explainSandbox, resultError } from '../../src/engine/providers/claude';
+import { cleanDomains, protectedPaths } from '../../src/engine/sandbox';
 import type { AgentRunOptions } from '../../src/engine/agent-runner.service';
 
 const noTool = async () => ({ content: [{ type: 'text' as const, text: '' }] });
@@ -91,6 +92,44 @@ test('Fix 1/7: each member gets its own in-process tool server; the orchestrator
   assert.equal(o.agents!.plain.mcpServers, undefined);
   assert.ok(o.allowedTools!.includes('mcp__agent_canvas__memory_save'));
   assert.ok(o.allowedTools!.includes('mcp__agent_canvas_m_alpha__memory_save'), 'permissions are per session, so members’ tools are allowed too');
+});
+
+test('Sandbox: shell commands are sandboxed by default, with no network and no escape hatch', () => {
+  const o = build({ cwd: '/work' });
+  assert.deepEqual(o.sandbox, {
+    enabled: true,
+    failIfUnavailable: true,
+    allowUnsandboxedCommands: false,
+    autoAllowBashIfSandboxed: false,
+    network: { allowedDomains: [] },
+    filesystem: { allowWrite: ['/work'], denyRead: protectedPaths() },
+  });
+  const custom = build({ sandbox: { writable: ['/out'], domains: ['pypi.org'] } });
+  assert.deepEqual((custom.sandbox as any).filesystem.allowWrite, ['/out']);
+  assert.deepEqual((custom.sandbox as any).network.allowedDomains, ['pypi.org']);
+});
+
+test('Sandbox: protected paths are denied to the file tools, even with the sandbox off', () => {
+  const paths = protectedPaths();
+  assert.ok(paths.some((p) => p.endsWith('/.ssh')));
+  assert.ok(paths.some((p) => p.endsWith('/.codex')));
+  assert.ok(paths.some((p) => p.endsWith('memory.db-wal')), 'SQLite side files too');
+  for (const opts of [build({}), build({ sandbox: false })]) {
+    assert.ok(opts.disallowedTools!.includes(`Read(/${paths[0]}/**)`), 'absolute-path rule syntax (//)');
+    assert.ok(opts.disallowedTools!.includes(`Edit(/${paths[0]})`));
+  }
+  assert.equal(build({ sandbox: false }).sandbox, undefined);
+});
+
+test('Sandbox: a sandbox that can’t start is explained; other errors pass through', () => {
+  assert.match(explainSandbox('Sandbox is not available: bubblewrap (bwrap) not found'), /install bubblewrap.*turn off "Sandbox shell commands"/);
+  assert.equal(explainSandbox('Something else failed'), 'Something else failed');
+  assert.equal(explainSandbox('sandbox_violations: deny network-outbound'), 'sandbox_violations: deny network-outbound', 'a blocked command is not a missing sandbox');
+});
+
+test('Sandbox: domain lists are cleaned', () => {
+  assert.deepEqual(cleanDomains(['https://PyPI.org/simple', ' github.com ', '*.npmjs.org', 'localhost', 'bad domain', 'pypi.org']), ['pypi.org', 'github.com', '*.npmjs.org']);
+  assert.deepEqual(cleanDomains('a.com, b.org  c.net'), ['a.com', 'b.org', 'c.net']);
 });
 
 test('Fix 6: one-off calls replace Claude Code’s system prompt and keep no session file', () => {

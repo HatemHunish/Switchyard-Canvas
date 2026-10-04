@@ -31,6 +31,8 @@ export interface Settings {
   maxTurns: number;
   /** Default spending limit in USD for one agent step's turn (0 = none). Estimated by Claude Code. */
   maxBudgetUsd: number;
+  /** Domains every sandboxed agent's shell commands may reach (each step can add its own). */
+  sandboxDomains: string[];
   /** macOS notification when a run needs your review or answer. */
   desktopNotifications: boolean;
   /** Where Output nodes write by default (per-workflow subfolders). */
@@ -59,6 +61,7 @@ const DEFAULT_SETTINGS: Settings = {
   rateLimitMaxWaitMs: 30 * 60_000,
   maxTurns: 100,
   maxBudgetUsd: 10,
+  sandboxDomains: [],
   desktopNotifications: true,
   outputsDir: join(DATA_DIR, 'outputs'),
   chromePath: '',

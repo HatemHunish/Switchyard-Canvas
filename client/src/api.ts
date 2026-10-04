@@ -163,6 +163,7 @@ export interface Settings {
   rateLimitMaxWaitMs: number;
   maxTurns: number;
   maxBudgetUsd: number;
+  sandboxDomains: string[];
   desktopNotifications: boolean;
   outputsDir: string;
   chromePath: string;

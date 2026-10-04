@@ -170,19 +170,77 @@ test('Fix 8: input the user controls is not fenced', async () => {
   assert.doesNotMatch(runner.calls[0].appendSystemPrompt ?? '', /untrusted/);
 });
 
-test('Fix 8: a warning flags risky tools on steps that read outside content', () => {
+test('Fix 8 + sandbox: a warning flags risky tools on steps that read outside content', () => {
   const hook = node('trigger.webhook');
-  const risky = node('agent', agentData('Risky', { allowedTools: ['Read', 'Bash(git:*)', 'WebSearch'] }));
-  const safe = node('agent', agentData('Safe', { allowedTools: ['WebSearch'] }));
-  const orch = node('orchestrator', agentData('Lead'));
+  const unboxed = node('agent', agentData('Unboxed', { sandbox: false, allowedTools: ['Read', 'Bash(git:*)', 'WebSearch'] }));
+  const boxed = node('agent', agentData('Boxed', { allowedTools: ['Bash', 'Write', 'Edit'] }));
+  const fetcher = node('agent', agentData('Fetcher', { allowedTools: ['WebFetch'] }));
+  const orch = node('orchestrator', agentData('Lead', { sandbox: false }));
   const member = node('agent', agentData('Writer', { allowedTools: ['Write'] }));
   const manual = node('trigger.manual');
-  const local = node('agent', agentData('Local', { allowedTools: ['Bash'] }));
-  const wf = workflow([hook, risky, safe, orch, member, manual, local], [edge(hook, risky), edge(risky, safe), edge(hook, orch), edge(orch, member, 'team'), edge(manual, local)]);
+  const local = node('agent', agentData('Local', { sandbox: false, allowedTools: ['Bash'] }));
+  const wf = workflow(
+    [hook, unboxed, boxed, fetcher, orch, member, manual, local],
+    [edge(hook, unboxed), edge(hook, boxed), edge(hook, fetcher), edge(hook, orch), edge(orch, member, 'team'), edge(manual, local)],
+  );
   const w = workflowWarnings(wf);
-  assert.deepEqual(w.map((x) => x.nodeId).sort(), [orch.id, risky.id].sort());
-  assert.match(w.find((x) => x.nodeId === risky.id)!.message, /can use Bash/);
-  assert.match(w.find((x) => x.nodeId === orch.id)!.message, /Write/, 'members’ tools count for the orchestrator');
+  assert.deepEqual(w.map((x) => x.nodeId).sort(), [unboxed.id, fetcher.id, orch.id].sort());
+  assert.match(w.find((x) => x.nodeId === unboxed.id)!.message, /can use Bash with the sandbox turned off/);
+  assert.match(w.find((x) => x.nodeId === fetcher.id)!.message, /WebFetch, which works outside the sandbox/);
+  assert.match(w.find((x) => x.nodeId === orch.id)!.message, /Write/, 'members’ tools count, under the orchestrator’s sandbox setting');
+  assert.ok(!w.some((x) => x.nodeId === boxed.id), 'sandboxed shell and file tools stay in the agent’s folder');
+});
+
+test('Sandbox: agents are sandboxed by default with no network; domains come from Settings and the step', async () => {
+  const { writeFileSync, readFileSync } = require('fs');
+  const settingsPath = require('path').join(process.env.AGENT_CANVAS_HOME!, 'settings.json');
+  const saved = readFileSync(settingsPath, 'utf8');
+  writeFileSync(settingsPath, JSON.stringify({ ...JSON.parse(saved), sandboxDomains: ['pypi.org'] }));
+  try {
+    const runner = new FakeRunner();
+    const { executor, store } = makeServices(runner);
+    const trigger = node('trigger.manual');
+    const plain = node('agent', agentData('Plain'));
+    const net = node('agent', agentData('Net', { networkDomains: ['https://GitHub.com/x', 'pypi.org', 'not a domain'] }));
+    const off = node('agent', agentData('Off', { sandbox: false }));
+    await runToEnd(executor, store, workflow([trigger, plain, net, off], [edge(trigger, plain), edge(plain, net), edge(net, off)]), trigger);
+    const cwd = process.env.AGENT_CANVAS_HOME!;
+    assert.deepEqual(runner.calls[0].sandbox, { writable: [cwd], domains: ['pypi.org'] });
+    assert.deepEqual(runner.calls[1].sandbox, { writable: [cwd], domains: ['pypi.org', 'github.com'] }, 'cleaned and merged');
+    assert.equal(runner.calls[2].sandbox, false);
+  } finally {
+    writeFileSync(settingsPath, saved);
+  }
+});
+
+test('Sandbox: an orchestrator’s session sandbox covers its members and adds their domains', async () => {
+  const runner = new FakeRunner();
+  const { executor, store } = makeServices(runner);
+  const t = teamWorkflow();
+  t.orch.data.networkDomains = ['example.com'];
+  t.alpha.data.networkDomains = ['github.com'];
+  await runToEnd(executor, store, t.wf, t.trigger);
+  assert.deepEqual(runner.calls[0].sandbox, { writable: [process.env.AGENT_CANVAS_HOME], domains: ['example.com', 'github.com'] });
+
+  t.orch.data.sandbox = false;
+  const r2 = new FakeRunner();
+  const s2 = makeServices(r2);
+  await runToEnd(s2.executor, s2.store, t.wf, t.trigger);
+  assert.equal(r2.calls[0].sandbox, false);
+});
+
+test('Sandbox: "Designed by Claude" output may write only into its output folder, with no network', async () => {
+  const runner = new FakeRunner((o) => {
+    require('fs').writeFileSync(o.prompt.split('\n')[1], 'x');
+    return { text: 'ok' };
+  });
+  const { executor, store } = makeServices(runner);
+  const trigger = node('trigger.manual');
+  const folder = require('path').join(process.env.AGENT_CANVAS_HOME!, 'designed');
+  const out = node('output', { format: 'docx', mode: 'claude', fileName: 'report', folder, title: '', instructions: '', model: 'haiku' });
+  const { run } = await runToEnd(executor, store, workflow([trigger, out], [edge(trigger, out)]), trigger, 'content');
+  assert.equal(run.status, 'success', run.error);
+  assert.deepEqual(runner.calls[0].sandbox, { writable: [folder], domains: [] });
 });
 
 test('Fix 9: a rate-limited step waits for the reported reset and retries', async () => {

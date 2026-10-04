@@ -10,6 +10,7 @@ import { ActionsService } from '../actions/actions.service';
 import { findChrome } from '../output/convert';
 import { EventBus } from '../engine/event-bus';
 import { ProcessQueue } from '../engine/queue';
+import { cleanDomains } from '../engine/sandbox';
 
 const run = promisify(execFile);
 
@@ -282,6 +283,7 @@ export class SystemController {
     if (body.rateLimitMaxWaitMs !== undefined) next.rateLimitMaxWaitMs = Math.max(0, Number(body.rateLimitMaxWaitMs) || 0);
     if (body.maxTurns !== undefined) next.maxTurns = Math.max(1, Math.floor(Number(body.maxTurns) || 1));
     if (body.maxBudgetUsd !== undefined) next.maxBudgetUsd = Math.max(0, Number(body.maxBudgetUsd) || 0);
+    if (body.sandboxDomains !== undefined) next.sandboxDomains = cleanDomains(body.sandboxDomains);
     saveSettings(next);
     this.queue.setLimit(next.concurrency);
     this.cache = null;

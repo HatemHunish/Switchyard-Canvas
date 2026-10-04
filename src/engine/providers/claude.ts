@@ -7,6 +7,7 @@ import { childPath } from '../../common/paths';
 import { NodeEvent, UsageInfo } from '../../common/types';
 import { AppToolScope, appToolDefs, appToolNames, mcpToolName, workerServerName } from '../app-tools';
 import type { ToolResult } from '../app-tools.service';
+import { protectedPaths, protectedRules } from '../sandbox';
 import { AgentResult, AgentRunOptions, appScope, ASK_TOOL, clip, importEsm, MCP_SERVER_NAME, RATE_LIMIT_RE, toolResultText } from '../agent-runner.service';
 
 const logger = new Logger('ClaudeAgent');
@@ -81,6 +82,10 @@ export function buildOptions(o: AgentRunOptions, sessionId: string, abortControl
   }
 
   const allowed = [...(o.allowedTools ?? []), ...ownTools, ...memberTools];
+  // Shell commands run in the OS sandbox unless the step turns it off. Protected paths are denied either way
+  // (to the file tools by rule, and to shell commands by the sandbox and the same rules).
+  const box = o.sandbox === false ? undefined : (o.sandbox ?? { writable: [o.cwd], domains: [] });
+  const protectedList = protectedPaths();
   const append = o.appendSystemPrompt?.trim();
   return {
     cwd: o.cwd,
@@ -103,7 +108,20 @@ export function buildOptions(o: AgentRunOptions, sessionId: string, abortControl
     tools: o.tools,
     allowedTools: allowed.length ? allowed : undefined,
     // Nobody can answer Claude Code's own question prompt in headless mode; agents ask through the app instead.
-    disallowedTools: [...(o.disallowedTools ?? []), 'AskUserQuestion'],
+    disallowedTools: [...(o.disallowedTools ?? []), 'AskUserQuestion', ...protectedRules(protectedList)],
+    ...(box
+      ? {
+          sandbox: {
+            enabled: true,
+            // Never fall back to running commands unsandboxed, and no per-command escape hatch.
+            failIfUnavailable: true,
+            allowUnsandboxedCommands: false,
+            autoAllowBashIfSandboxed: false,
+            network: { allowedDomains: box.domains },
+            filesystem: { allowWrite: box.writable, denyRead: protectedList },
+          },
+        }
+      : {}),
     mcpServers: Object.keys(mcpServers).length ? mcpServers : undefined,
     hooks: Object.keys(hooks).length ? hooks : undefined,
     outputFormat: o.jsonSchema?.trim() ? { type: 'json_schema', schema: JSON.parse(o.jsonSchema) } : undefined,
@@ -116,6 +134,12 @@ export function buildOptions(o: AgentRunOptions, sessionId: string, abortControl
 /** resetsAt may come in seconds or milliseconds. */
 const toMs = (t?: number) => (!t ? undefined : t < 1e12 ? t * 1000 : t);
 
+/** Says what to do when the OS sandbox can't start on this computer. */
+export function explainSandbox(error: string): string {
+  if (!/sandbox/i.test(error) || !/(unavailable|not available|not supported|unsupported|missing|bubblewrap|bwrap|socat|failed to (start|initiali))/i.test(error)) return error;
+  return `The sandbox for shell commands isn't available on this computer (${error.slice(0, 300)}). On Linux, install bubblewrap and socat; or turn off "Sandbox shell commands" for this step.`;
+}
+
 /** Plain-language error for a result that didn't succeed. */
 export function resultError(result: any, o: Pick<AgentRunOptions, 'maxTurns' | 'maxBudgetUsd'>, text: string): string {
   switch (result.subtype) {
@@ -123,6 +147,8 @@ export function resultError(result: any, o: Pick<AgentRunOptions, 'maxTurns' | '
       return `Stopped after ${result.num_turns ?? o.maxTurns} turns, the limit for this step (Max turns). Raise it in the step's settings if the task needs more.`;
     case 'error_max_budget_usd':
       return `Stopped at the spending limit for this step ($${o.maxBudgetUsd}, Max spend). Raise it in the step's settings if the task needs more.`;
+    case 'error_during_execution':
+      return explainSandbox(clip(text || result.errors?.join('\n') || 'Run failed', 1500));
     case 'error_max_structured_output_retries':
       return 'The agent could not produce output matching the JSON Schema.';
     default:
@@ -203,7 +229,7 @@ export async function runClaude(o: AgentRunOptions, deps: ClaudeDeps): Promise<A
   } catch (err: any) {
     // The SDK throws after yielding an error result (e.g. max turns); that result explains it better.
     if (!abortController.signal.aborted && !result) {
-      const error = clip(stderr.trim() || err?.message || String(err), 1500);
+      const error = explainSandbox(clip(stderr.trim() || err?.message || String(err), 1500));
       logger.warn(error);
       emit({ t: 'error', text: error });
       return { ok: false, text: lastText, sessionId, costUsd: result?.total_cost_usd ?? 0, error, cancelled: false, ...limitResult(error) };

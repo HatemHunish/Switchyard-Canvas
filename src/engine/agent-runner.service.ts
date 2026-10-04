@@ -5,6 +5,7 @@ import { AgentProvider, NodeEvent, PermissionMode } from '../common/types';
 import { AppToolScope, appToolNames, ASK_TOOL, MCP_SERVER_NAME, ToolDef } from './app-tools';
 import { AppToolsService } from './app-tools.service';
 import { EventBus } from './event-bus';
+import type { SandboxSpec } from './sandbox';
 import { runClaude } from './providers/claude';
 import { runCodex } from './providers/codex';
 
@@ -66,6 +67,11 @@ export interface AgentRunOptions {
   maxTurns?: number;
   /** Stop once the estimated cost of this turn passes this many dollars. */
   maxBudgetUsd?: number;
+  /**
+   * OS sandbox for shell commands: writes only in `writable`, network only to `domains`, never the protected paths.
+   * Default: sandboxed with writable = [cwd] and no network. `false` turns it off.
+   */
+  sandbox?: SandboxSpec;
   /** Keep the session on disk so it can be resumed later (default true). */
   persistSession?: boolean;
   /** Extra environment variables for the agent process. */
